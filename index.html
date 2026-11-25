@@ -186,6 +186,19 @@ const SONGS={
     for(let i=0;i<tk.length;i++){const m=/^([A-G])(#?)(\d)$/.exec(tk[i]);if(!m)continue;let L=1;while(i+L<tk.length&&tk[i+L]==='-')L++;
       s.map[i]={m:12*(+m[3]+1)+nn[m[1]]+(m[2]?1:0),len:L}}}})();
 
+/* iPhone: hang feloldása érintésre, és a némító kapcsoló ellenére is szóljon */
+function silentWavURL(){const n=800,b=new ArrayBuffer(44+n),v=new DataView(b),w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))};
+  w(0,'RIFF');v.setUint32(4,36+n,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,8000,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,'data');v.setUint32(40,n,true);for(let i=0;i<n;i++)v.setUint8(44+i,128);
+  return URL.createObjectURL(new Blob([b],{type:'audio/wav'}))}
+let silentEl=null;
+function unlockAudio(){try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(_){}
+  AU.init();const C=AU.C;if(!C)return;
+  if(C.state!=='running'&&!game.paused)C.resume().catch(()=>{});
+  if(!AU.unlocked){try{const b=C.createBuffer(1,1,22050),s=C.createBufferSource();s.buffer=b;s.connect(C.destination);s.start(0)}catch(_){}
+    try{silentEl=new Audio(silentWavURL());silentEl.loop=true;silentEl.setAttribute('playsinline','');silentEl.volume=0.01;silentEl.play().catch(()=>{})}catch(_){}
+    AU.unlocked=true}}
+['touchstart','touchend','click','pointerup','keydown'].forEach(ev=>addEventListener(ev,unlockAudio,{capture:true,passive:true}));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&AU.C&&AU.C.state!=='running'&&!game.paused)AU.C.resume().catch(()=>{})});
 const MUS={timer:null,song:null,step:0,next:0,tr:0,bpm:140,
   play(name,tr=0,bpm){if(!AU.C)return;this.stop();this.song=SONGS[name];this.tr=tr;this.bpm=bpm||this.song.bpm;this.step=0;this.next=AU.t+.08;this.timer=setInterval(()=>this.tick(),25)},
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null},
@@ -273,19 +286,19 @@ const G={jc:0,ac:0,pc:0,lastSent:'',hostSeen:0,lastV:-1,lastFx:-1,rjc:null,rac:n
 function toMsg(t){game.state='msg';game.msg=t;game.sel=0}
 function toTitle(){leaveRoom();game.state='title';game.sel=0;game.paused=false;if(AU.C&&AU.C.state==='suspended')AU.C.resume();MUS.play('A',-5,128)}
 function noNet(){if(typeof Peer==='undefined'){toMsg('A hálózati modul nem töltődött be. Frissítsd az oldalt!');return true}return false}
-function hostRoom(me,tries=0){
-  if(noNet())return;const code=String(1000+Math.floor(Math.random()*9000));
+function hostRoom(me,tries=0,resume=null){
+  if(noNet())return;const code=resume&&resume.code&&tries<6?resume.code:String(1000+Math.floor(Math.random()*9000));
   game.state='joining';roomCode=code;
   const peer=new Peer(PFX+code,Object.assign({debug:0},window.PEER_OPTS||{}));PEER=peer;
   peer.on('open',()=>{if(PEER!==peer)return;NR=mkNet(peer);game.mode='host';game.me=me;game.state='lobby';game.sel=0;
-    Object.assign(G,{rjc:null,rac:null,rpc:null,waitT:0,fx:[]});NR.presence({r:'host',hc:me,st:null})});
+    Object.assign(G,{rjc:null,rac:null,rpc:null,waitT:0,fx:[]});game.pendingResume=resume;NR.presence({r:'host',hc:me,st:null})});
   peer.on('connection',c=>{if(NR)NR.attach(c)});
   peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(_){}});
   peer.on('error',e=>{if(PEER!==peer)return;
-    if(e.type==='unavailable-id'&&tries<5){try{peer.destroy()}catch(_){}PEER=null;hostRoom(me,tries+1);return}
+    if(e.type==='unavailable-id'&&tries<8){try{peer.destroy()}catch(_){}PEER=null;if(resume&&tries<6)setTimeout(()=>{if(game.state==='joining')hostRoom(me,tries+1,resume)},2000);else hostRoom(me,tries+1,resume);return}
     if(!NR){leaveRoom();toMsg('Nem sikerült szobát nyitni (nincs internet?). Próbáld újra!')}})}
 function joinRoom(code){
-  if(noNet())return;game.state='joining';roomCode=code;
+  if(noNet())return;game.state='joining';roomCode=code;try{localStorage.setItem('lovag-masni-lastcode',code)}catch(_){}
   const peer=new Peer(Object.assign({debug:0},window.PEER_OPTS||{}));PEER=peer;
   peer.on('open',()=>{if(PEER!==peer)return;NR=mkNet(peer);game.mode='guest';
     Object.assign(G,{jc:0,ac:0,pc:0,lastSent:'',hostSeen:T,lastV:-1,lastFx:-1});LV=null;
@@ -294,6 +307,15 @@ function joinRoom(code){
   peer.on('error',e=>{if(PEER!==peer)return;
     if(e.type==='peer-unavailable'){leaveRoom();toMsg('Nincs nyitott szoba ezzel a kóddal: '+code+'. Ellenőrizd a kódot!')}
     else if(game.state==='joining'){leaveRoom();toMsg('Nem sikerült kapcsolódni. Próbáld újra!')}})}
+const SAVE_KEY='lovag-masni-save';
+function loadSave(){try{const s=JSON.parse(localStorage.getItem(SAVE_KEY)||'null');return s&&s.v===1&&LEVELS[s.lvl]?s:null}catch(_){return null}}
+function writeSave(){if(game.mode==='guest'||game.state!=='play'||!LV)return;
+  try{localStorage.setItem(SAVE_KEY,JSON.stringify({v:1,mode:game.mode,code:game.mode==='host'?roomCode:null,me:game.me,lvl:game.lvl,coins:game.coins,deaths:game.deaths,cp:LV.cp,mods:LV.mods,t:Date.now()}))}catch(_){}}
+function clearSave(){try{localStorage.removeItem(SAVE_KEY)}catch(_){}}
+function resumeGame(sv){game.coins=sv.coins||0;game.deaths=sv.deaths||0;game.lvl=sv.lvl;startLevel(sv.lvl);
+  for(const k in (sv.mods||{})){const [x,y]=k.split(',').map(Number);setT(x,y,sv.mods[k])}
+  if(sv.cp)LV.cp={x:sv.cp.x,top:sv.cp.top};placePlayers();
+  const mx=(PL[0].x+PL[1].x)/2;cam.x=Math.max(0,Math.min(LV.w*TS-VW,mx-VW/2));cam.y=Math.max(0,Math.min(LV.h*TS-VH,PL[0].y-VH*.55));game.intro=120}
 function leaveRoom(){if(NR){NR.leave();NR=null}else if(PEER){try{PEER.destroy()}catch(_){}}PEER=null;game.mode='local';roomCode=null;game.me=0}
 function peerWith(r){if(!NR)return null;try{return NR.peers().find(p=>!p.sameTab&&p.presence&&p.presence.r===r)||null}catch(_){return null}}
 function inviteURL(){return location.origin+location.pathname+'#'+roomCode}
@@ -306,7 +328,7 @@ function remoteInput(){const g=peerWith('guest'),i=g&&Array.isArray(g.presence.i
   if(G.rpc!==null&&i[3]!==G.rpc&&game.state==='play')togglePause();
   G.rjc=i[1];G.rac=i[2];G.rpc=i[3];return cur}
 const r1=v=>Math.round(v*10)/10;
-function snap(){return{v:++G.snapSeq,s:game.state,l:game.lvl,c:game.coins,d:game.deaths,dy:game.dying,cl:game.clear,it:game.intro,pz:game.paused?1:0,w:G.waitT>60?1:0,L:Math.round(rope.L),
+function snap(){return{v:++G.snapSeq,s:game.state,l:game.lvl,c:game.coins,d:game.deaths,dy:game.dying,cl:game.clear,it:game.intro,pz:game.paused?1:0,w:G.waitT>60?1:0,sf:game.saveFlash>0?1:0,L:Math.round(rope.L),
   p:PL.map(p=>[r1(p.x),r1(p.y),r1(p.vx),r1(p.vy),p.face,(p.anch?1:0)|(p.onG?2:0)|(p.flag?4:0)|(p.onK?8:0),p.atk,p.bub,p.anim%1000]),
   e:ents.map(e=>e.alive?[Math.round(e.x),Math.round(e.y),e.vx>0?1:0]:(e.dt||0)),
   m:Object.entries(LV.mods).map(([k,c])=>k+','+c).join(';'),fx:G.fx}}
@@ -320,7 +342,7 @@ function applySnap(st){
   if(!LV||game.lvl!==st.l||game.state!=='play'){game.lvl=st.l;startLevel(st.l)}
   if(st.dy&&!game.dying)for(const p of PL)puff(p.x+p.w/2,p.y+p.h/2,'#ff77a8',10,2,.1);
   if(st.cl&&!game.clear)MUS.stop();
-  game.dying=st.dy;game.clear=st.cl;game.intro=st.it;game.paused=!!st.pz;game.remoteWait=!!st.w;rope.L=st.L;
+  if(st.sf&&!game.saveFlash)game.saveFlash=90;game.dying=st.dy;game.clear=st.cl;game.intro=st.it;game.paused=!!st.pz;game.remoteWait=!!st.w;rope.L=st.L;
   (st.p||[]).forEach((a,i)=>{const p=PL[i];if(!p)return;[p.x,p.y,p.vx,p.vy,p.face]=a;const f=a[5];p.anch=!!(f&1);p.onG=!!(f&2);p.flag=!!(f&4);p.onK=!!(f&8);p.atk=a[6];p.bub=a[7];p.anim=a[8]});
   (st.e||[]).forEach((a,i)=>{const e=ents[i];if(!e)return;if(Array.isArray(a)){e.alive=true;e.x=a[0];e.y=a[1];e.vx=a[2]?Math.abs(e.vx0):-Math.abs(e.vx0)}
     else{if(e.alive)puff(e.x+7,e.y+5,'#b55088',8,1.5,.1);e.alive=false;e.dt=a}});
@@ -442,7 +464,7 @@ const LEVELS=[
 const SOLID=new Set(['#','X','B','?','u','D']);
 const KCFG={k:1,w:12,h:27,acc:.36,max:1.9,jump:5.6,jump2:0,inv:.45,gInv:.08};
 const CCFG={k:0,w:11,h:10,acc:.45,max:2.4,jump:5.2,jump2:4.6,inv:1,gInv:.5};
-const game={flash:'',flashT:0,codeIn:'',mode:'local',me:0,sel:0,msg:'',remoteWait:false,state:'title',lvl:0,coins:0,deaths:0,dying:0,clear:0,intro:0,paused:false,sign:null,endT:0};
+const game={saveFlash:0,pendingResume:null,flash:'',flashT:0,codeIn:'',mode:'local',me:0,sel:0,msg:'',remoteWait:false,state:'title',lvl:0,coins:0,deaths:0,dying:0,clear:0,intro:0,paused:false,sign:null,endT:0};
 let LV=null,PL=[],ents=[],parts=[],cam={x:0,y:0},T=0;
 const rope={L:128,MAX:128,MIN:12};
 
@@ -502,9 +524,19 @@ function touchTiles(p){const x0=Math.floor(p.x/TS),x1=Math.floor((p.x+p.w-.01)/T
     if(c==='o'){setT(x,y,' ');game.coins++;AU.play('coin');sparkle(x*TS+8,y*TS+8)}
     else if(c==='^'){if(p.y+p.h>y*TS+9&&p.x+p.w>x*TS+2&&p.x<x*TS+14)die()}
     else if(c==='S'){setT(x,y,'Z');openDoors()}
-    else if(c==='P'){setT(x,y,'Q');LV.cp={x:x*TS-8,top:(y+1)*TS};AU.play('cp');puff(x*TS+12,y*TS+4,'#a7f070',10,1.5,0)}}}
+    else if(c==='P'){setT(x,y,'Q');LV.cp={x:x*TS-8,top:(y+1)*TS};AU.play('cp');setTimeout(writeSave,0);puff(x*TS+12,y*TS+4,'#a7f070',10,1.5,0)}}}
 function die(){if(game.dying||game.clear)return;game.dying=70;game.deaths++;AU.play('die');
   for(const p of PL){puff(p.x+p.w/2,p.y+p.h/2,'#ff77a8',10,2,.1);puff(p.x+p.w/2,p.y+p.h/2,'#f4f4f4',6,2,.1)}}
+function autoCheckpoint(){const K=PL[0],C=PL[1];
+  if(!K.onG||!C.onG||C.onK){LV.safeT=0;return}
+  const minX=Math.min(K.x,C.x);if(minX<LV.cp.x+48){LV.safeT=0;return}
+  const top=K.y+K.h;if(Math.abs(C.y+C.h-top)>.5||Math.abs(top/TS-Math.round(top/TS))>.01){LV.safeT=0;return}
+  const ty=Math.round(top/TS),x=Math.floor(minX/TS)*TS;
+  for(let px=x;px<x+28;px+=4){const tx=Math.floor(px/TS);if(!SOLID.has(tile(tx,ty))){LV.safeT=0;return}
+    for(let r=1;r<=2;r++){const c=tile(tx,ty-r);if(SOLID.has(c)||c==='^'){LV.safeT=0;return}}}
+  for(const e of ents)if(e.alive&&Math.abs(e.x-x)<72&&Math.abs(e.y-(ty*TS-16))<56){LV.safeT=0;return}
+  if(++LV.safeT<40)return;
+  LV.safeT=0;LV.cp={x,top:ty*TS};game.saveFlash=90;writeSave()}
 function respawn(){placePlayers();for(const e of ents)if(e.alive){e.x=e.x0;e.y=e.y0;e.vx=e.vx0;e.vy=0}}
 
 /* ---------- fonal ---------- */
@@ -585,7 +617,7 @@ function simStep(){
   if(game.intro>0)game.intro--;
   updParts();
   if(game.clear>0){game.clear--;for(const p of PL){p.anim++;if(p.onG&&game.clear%40===0)p.vy=-4;p.vy=Math.min(p.vy+.4,7);p.onG=moveY(p,p.vy)===1;if(p.onG)p.vy=0}
-    if(game.clear===0){game.lvl++;if(game.lvl>=LEVELS.length){game.state='end';game.endT=0;MUS.play('A',5,150)}else startLevel(game.lvl)}return}
+    if(game.clear===0){game.lvl++;if(game.lvl>=LEVELS.length){game.state='end';game.endT=0;clearSave();MUS.play('A',5,150)}else{startLevel(game.lvl);writeSave()}}return}
   if(game.dying>0){game.dying--;if(game.dying===0)respawn();return}
   const K=PL[0],C=PL[1],kx=K.x,ky=K.y;
   updPlayer(K,IN[0],C);K.dx=K.x-kx;K.dy=K.y-ky;
@@ -594,6 +626,7 @@ function simStep(){
   if((K.onG&&C.onG)||(!K.anch&&!C.anch))rope.L=Math.min(rope.MAX,rope.L+2.5);
   updEnts();
   if(game.dying)return;
+  autoCheckpoint();if(T%300===0)writeSave();
   for(const p of PL){touchTiles(p);const f=LV.flag;
     if(f&&!p.flag&&p.x<f.x+3&&p.x+p.w>f.x-1&&p.y<f.bot&&p.y+p.h>f.top){p.flag=true;AU.play('cp');sparkle(f.x,p.y)}}
   if(K.flag&&C.flag&&!game.clear){game.clear=230;MUS.stop();AU.play('win')}
@@ -603,22 +636,24 @@ function simStep(){
 /* ---------- menük ---------- */
 function menuItems(){
   switch(game.state){
-  case 'title':return[{t:'Játék egy eszközön, ketten',f:()=>{game.mode='local';startGame()}},
+  case 'title':{const sv=loadSave(),cont=[];
+    if(sv)cont.push(sv.mode==='host'&&sv.code?{t:'Folytatás online – szoba '+sv.code+', '+LEVELS[sv.lvl].name,f:()=>hostRoom(sv.me,0,sv)}:{t:'Folytatás egy eszközön – '+LEVELS[sv.lvl].name,f:()=>{game.mode='local';resumeGame(sv)}});
+    return[...cont,{t:'Új játék egy eszközön, ketten',f:()=>{game.mode='local';startGame()}},
     {t:'Online, két telefon: új szoba – én vagyok a LOVAG',f:()=>hostRoom(0)},
     {t:'Online, két telefon: új szoba – én vagyok MASNI',f:()=>hostRoom(1)},
-    {t:'Online: csatlakozás szobakóddal',f:()=>{game.state='code';game.codeIn='';game.sel=0}}];
+    {t:'Online: csatlakozás szobakóddal',f:()=>{game.state='code';let lc='';try{lc=localStorage.getItem('lovag-masni-lastcode')||''}catch(_){}game.codeIn=/^\d{4}$/.test(lc)?lc:'';game.sel=0}}];}
   case 'code':return[{t:'Vissza',f:()=>{game.state='title';game.sel=0}}];
   case 'lobby':return[{t:navigator.share?'Meghívó link küldése':'Meghívó link másolása',f:shareInvite},{t:'Mégse',f:toTitle}];
   case 'joining':return[{t:'Mégse',f:toTitle}];
   case 'msg':return[{t:'Vissza a címképernyőre',f:toTitle}];
   default:return[];}}
 function menuRects(items,y0){return items.map((it,i)=>({x:VW/2-170,y:y0+i*17,w:340,h:15}))}
-function menuY(){return game.state==='title'?156:game.state==='code'?232:game.state==='lobby'?196:game.state==='joining'?200:150}
+function menuY(){return game.state==='title'?(menuItems().length>4?140:156):game.state==='code'?232:game.state==='lobby'?196:game.state==='joining'?200:150}
 const KP=['1','2','3','4','5','6','7','8','9','⌫','0','OK'];
 function kpRects(){return KP.map((k,i)=>({k,x:VW/2-66+(i%3)*46,y:96+Math.floor(i/3)*30,w:40,h:24}))}
 function codeKey(k){if(k==='⌫')game.codeIn=game.codeIn.slice(0,-1);else if(k==='OK'){if(game.codeIn.length===4){AU.init();joinRoom(game.codeIn)}}else if(game.codeIn.length<4)game.codeIn+=k;AU.play('bump')}
 function menuStep(){
-  if(game.state==='lobby'&&peerWith('guest')){startGame();return}
+  if(game.state==='lobby'&&peerWith('guest')){if(game.pendingResume)resumeGame(game.pendingResume);else startGame();game.pendingResume=null;writeSave();return}
   if(game.state==='code'){for(let d=0;d<10;d++)if(jp.has('Digit'+d)||jp.has('Numpad'+d))codeKey(String(d));
     if(jp.has('Backspace'))codeKey('⌫');if(jp.has('Enter')||jp.has('NumpadEnter')){codeKey('OK');return}
     if(jp.has('Escape')){game.state='title';return}
@@ -751,6 +786,7 @@ function renderPlay(){const Th=THEMES[LV.theme],ox=Math.round(cam.x),oy=Math.rou
     txt(LV.name,VW/2,100,{al:'center',sz:16,c:'#ffcd75'});txt('Lovag & Masni – együtt, előre!',VW/2,122,{al:'center',c:'#f4f4f4'});ctx.globalAlpha=1}
   if(game.dying)txt('Jaj! Még egyszer, együtt!',VW/2,110,{al:'center',sz:14,c:'#ff77a8'});
   if(game.clear){const cols=['#ffcd75','#ff77a8','#73eff7','#a7f070'];txt('PÁLYA TELJESÍTVE!',VW/2,96,{al:'center',sz:22,c:cols[(T>>3)%4]});txt('Érmék: '+game.coins,VW/2,124,{al:'center',sz:10})}
+  if(game.saveFlash>0){game.saveFlash--;txt('✓ Mentési pont',VW-5,15,{al:'right',c:'#a7f070',sz:7})}
   if(game.mode!=='local'){txt('Online · szoba '+roomCode+' · te: '+(game.me===0?'Lovag':'Masni'),5,15,{c:'#a7f070',sz:7})}
   if((game.mode==='host'&&G.waitT>60)||(game.mode==='guest'&&game.remoteWait)){R(0,0,VW,VH,'rgba(10,10,20,.65)');txt('Várakozás a társra…',VW/2,104,{al:'center',sz:16,c:'#ffcd75'});txt('Szoba: '+roomCode+' – a társ a szobakóddal tud visszajönni.',VW/2,128,{al:'center'})}
   if(game.paused){R(0,0,VW,VH,'rgba(10,10,20,.6)');txt('SZÜNET',VW/2,104,{al:'center',sz:22,c:'#ffcd75'});txt('P / Esc: folytatás   M: zene ki/be',VW/2,134,{al:'center'})}
@@ -771,15 +807,14 @@ function scroller(y){ctx.font=`bold 10px ${FONT}`;ctx.textAlign='left';ctx.textB
   for(let i=0;i<SCROLL.length;i++){const x=VW-off+i*cw;if(x<-8||x>VW)continue;const yy=y+Math.round(Math.sin(x*.04+T*.08)*6);
     ctx.fillStyle='#1a1c2c';ctx.fillText(SCROLL[i],x+1,yy+1);ctx.fillStyle=`hsl(${(x*1.2+T*3)%360},90%,70%)`;ctx.fillText(SCROLL[i],x,yy)}}
 function drawTitle(){bgDemo();bigTitle('LOVAG & MASNI',14,40);txt('~ A fonal kalandja ~',VW/2,60,{al:'center',sz:11,c:'#ff77a8'});
-  dK.anim=dC.anim=T;const gy=140;R(110,gy,260,2,'#566c86');
+  dK.anim=dC.anim=T;const gy=134;R(110,gy,260,2,'#566c86');
   ctx.save();ctx.translate(150,gy-56);ctx.scale(2,2);drawParts(knightParts(dK),0,0,14,1);ctx.restore();
   ctx.save();ctx.translate(300,gy-22+Math.round(Math.abs(Math.sin(T*.06))*-6));ctx.scale(2,2);drawParts(catParts(dC),0,0,12,-1);ctx.restore();
   drawRopeAt(156,gy-20,312,gy-26+Math.round(Math.abs(Math.sin(T*.06))*-6),190);
   drawMenu();
   const pads=getPads().length;
   txt('Lovag: A/D, W ugrás, S horgony, F kard  ·  Masni: nyilak, ↓ horgony, Enter miaú',VW/2,228,{al:'center',c:'#94b0c2',sz:7});
-  txt(pads?'🎮 '+pads+' kontroller csatlakozva – A ugrás, B horgony, X kard/miaú, Start szünet':'Xbox-kontroller: csatlakoztasd, és nyomj meg rajta egy gombot',VW/2,238,{al:'center',c:pads?'#a7f070':'#94b0c2',sz:7});
-  if(isTouch&&innerHeight>innerWidth)txt('Fordítsd fekvőre a telefont!',VW/2,146,{al:'center',c:'#ffcd75'});
+  if(isTouch&&innerHeight>innerWidth)txt('Fordítsd fekvőre a telefont!',VW/2,238,{al:'center',c:'#ffcd75'});else txt(pads?'🎮 '+pads+' kontroller csatlakozva – A ugrás, B horgony, X kard/miaú, Start szünet':'Xbox-kontroller: csatlakoztasd, és nyomj meg rajta egy gombot',VW/2,238,{al:'center',c:pads?'#a7f070':'#94b0c2',sz:7});
   scroller(250)}
 function drawLobby(){bgDemo();
   if(game.state==='code'){bigTitle('SZOBAKÓD',14,32);txt('Írd be a társad telefonján látható 4 számjegyű kódot:',VW/2,58,{al:'center',c:'#ffcd75'});
