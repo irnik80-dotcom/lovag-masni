@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Szökés a Varjúkő-kastélyból</title>
+<link href="https://fonts.googleapis.com/css2?family=Creepster&family=IM+Fell+English+SC&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
+<style>
+/* VOICE: spooky-cute family horror, a candlelit castle at night
+   IDEA: a point-and-click escape room in a haunted castle
+   PICTURE: each room is one illustrated SVG scene that is the playfield
+   COLOUR and TYPE: deep plum-black stone, candle amber, blood red; Creepster titles, IM Fell for notes, Nunito for UI
+   LAYOUT: scene on top, heroes + speech bubble + inventory below */
+:root{color-scheme:dark;--bg:#0b080d;--ink:#efe6d8;--amber:#ffb340;--blood:#b3121b;--panel:#1a1320}
+*{box-sizing:border-box;min-width:0;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 Nunito,system-ui,sans-serif;overflow-x:clip;user-select:none}
+#game{max-width:1100px;margin:0 auto;padding:8px}
+#sceneWrap{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 0 0 2px #3a2a40,0 10px 40px #000}
+#scene{display:block;width:100%;height:auto;background:#000;touch-action:manipulation}
+#roomTitle{position:absolute;left:14px;top:8px;font:28px Creepster,cursive;color:#d9c7ff;text-shadow:0 2px 6px #000;letter-spacing:1px;pointer-events:none}
+#flash{position:absolute;inset:0;background:#dfe8ff;opacity:0;pointer-events:none}
+#flash.on{animation:fl 1.1s}
+@keyframes fl{0%{opacity:0}5%{opacity:.85}12%{opacity:.1}20%{opacity:.7}100%{opacity:0}}
+#scene [data-hs]{cursor:pointer}
+#scene [data-hs]:hover{filter:brightness(1.35)}
+#hud{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;margin-top:10px;align-items:stretch}
+#chars{display:flex;gap:6px;align-items:flex-end}
+.av{width:72px;height:80px;transition:transform .2s}
+.av.talk{animation:bob .45s infinite alternate}
+@keyframes bob{to{transform:translateY(-6px) rotate(-3deg)}}
+#bubble{background:var(--panel);border:2px solid #4b3656;border-radius:14px;padding:10px 14px;min-height:80px;display:flex;flex-direction:column;justify-content:center}
+#bubble b{color:var(--amber);font-weight:800}
+#bubble.p b{color:#ffb6d9}#bubble.m b{color:#e0a96d}#bubble.n b{color:#b9a7d9}
+#bottom{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center}
+#inv{display:flex;gap:8px;flex:1;flex-wrap:wrap;min-height:64px;background:var(--panel);border-radius:12px;padding:6px;border:2px solid #33243b}
+#inv:empty::before{content:"A zsebetek még üres…";color:#7d6c88;padding:14px}
+.it{width:64px;height:52px;border-radius:10px;background:#2a1f31;border:2px solid #4b3656;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;font-size:22px;line-height:1}
+.it small{font-size:11px;margin-top:3px;color:#cbb}
+.it.sel{border-color:var(--amber);box-shadow:0 0 12px var(--amber);background:#3b2a1d}
+.btn{font:800 15px Nunito;background:#3a2346;color:#fff;border:2px solid #6c4880;border-radius:12px;padding:10px 14px;min-height:44px;cursor:pointer}
+.btn:hover{background:#4c2d5c}.btn:focus-visible{outline:3px solid var(--amber)}
+.btn.red{background:#6b0f16;border-color:#a3212b}
+#modal,#jump,#start,#win{position:fixed;inset:0;display:none;z-index:20}
+#modal{background:#000a;align-items:center;justify-content:center;padding:16px}
+#modal.on,#start.on,#win.on{display:flex}
+.box{background:#1c1422;border:3px solid #5a4068;border-radius:18px;padding:18px;max-width:440px;width:100%;text-align:center;box-shadow:0 10px 50px #000}
+.box h3{font:30px Creepster,cursive;margin:0 0 10px;color:#e7d3ff;letter-spacing:1px}
+.paper{background:linear-gradient(#e9dcbc,#d4c194);color:#3a2a14;font:22px/1.4 'IM Fell English SC',serif;padding:22px;border-radius:6px;transform:rotate(-1.5deg);box-shadow:inset 0 0 30px #8a6b3a}
+.disp{display:flex;gap:8px;justify-content:center;margin:8px 0 14px}
+.disp span{width:46px;height:56px;border-radius:8px;background:#0b070d;border:2px solid #6b4d7a;font:800 30px/52px Nunito;color:#7cff9b;text-shadow:0 0 8px #3f6}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.pad button,.wheel button{font:800 22px Nunito;min-height:54px;border-radius:10px;border:2px solid #5a4068;background:#2d2036;color:#fff;cursor:pointer}
+.pad button:active,.wheel button:active{background:#4a3358}
+.wheels{display:flex;gap:10px;justify-content:center;margin:10px 0 14px}
+.wheel{display:flex;flex-direction:column;gap:6px;align-items:center}
+.wheel div{width:56px;height:64px;border-radius:10px;background:linear-gradient(#a07a2a,#e3c06a,#a07a2a);color:#2a1a05;font:800 34px/64px 'IM Fell English SC',serif}
+.wheel button{width:56px;min-height:40px;font-size:18px}
+.organ{display:flex;gap:6px;justify-content:center;margin:14px 0}
+.organ button{width:62px;height:150px;border-radius:0 0 10px 10px;background:linear-gradient(#fffef6,#d8d2c0);border:2px solid #222;font:30px serif;color:#4a1010;display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px;cursor:pointer}
+.organ button.dn{background:linear-gradient(#c9c2a8,#a9a28a);transform:translateY(4px)}
+.row{display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap}
+.shake{animation:sh .4s}
+@keyframes sh{20%,60%{transform:translateX(-10px)}40%,80%{transform:translateX(10px)}}
+#jump{background:#000;align-items:center;justify-content:center}
+#jump.on{display:flex;animation:jz .9s forwards}
+#jump svg{width:min(95vw,95vh);height:auto;animation:jzs .9s}
+@keyframes jz{0%{background:#000}10%{background:#5a0000}100%{background:#000}}
+@keyframes jzs{0%{transform:scale(.3)}15%{transform:scale(1.15) rotate(3deg)}30%{transform:scale(1) rotate(-3deg)}45%{transform:scale(1.08) rotate(2deg)}100%{transform:scale(1.02)}}
+#start,#win{background:radial-gradient(ellipse at 50% 30%,#2a1838,#07050a 70%);align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:20px;overflow:auto}
+#start h1,#win h1{font:clamp(40px,8vw,78px)/1.05 Creepster,cursive;color:#e9d6ff;margin:8px 0;text-shadow:0 0 18px #8b3fd1,0 4px 0 #3b0f4f;letter-spacing:2px}
+#start p,#win p{max-width:560px;color:#cdbfd8}
+#start svg,#win svg{width:min(560px,92vw);height:auto}
+#win{background:linear-gradient(#2b1d4a,#c2557a 55%,#ffb46b)}
+#win h1{color:#fff4d6;text-shadow:0 4px 0 #6b2340}
+/* scene animations */
+.fl{transform-box:fill-box;transform-origin:50% 100%;animation:flick .18s infinite alternate}
+@keyframes flick{from{transform:scale(1,1)}to{transform:scale(.88,1.12) skewX(3deg)}}
+.glow{animation:gl 2.5s infinite alternate}
+@keyframes gl{from{opacity:.35}to{opacity:.6}}
+.rain{animation:rain .5s linear infinite}
+@keyframes rain{from{transform:translateY(-40px)}to{transform:translateY(40px)}}
+.veins{opacity:0;transition:opacity .3s}.rolled .veins{opacity:1}
+.bleed{stroke-dasharray:120;stroke-dashoffset:120;animation:bl 4s forwards}
+@keyframes bl{to{stroke-dashoffset:0}}
+.drop{animation:dr 1.6s infinite ease-in}
+@keyframes dr{0%{transform:translateY(0);opacity:1}85%{opacity:1}100%{transform:translateY(190px);opacity:0}}
+.pool{transform-box:fill-box;transform-origin:center;animation:po 6s forwards}
+@keyframes po{from{transform:scale(.2)}to{transform:scale(1)}}
+.write{opacity:0;animation:wr 3s forwards}
+@keyframes wr{to{opacity:1}}
+.fall{animation:fa .6s cubic-bezier(.5,0,1,1)}
+@keyframes fa{from{transform:translate(-30px,-380px) rotate(-60deg)}to{transform:none}}
+.redeye{animation:re 1.4s infinite alternate}
+@keyframes re{from{opacity:.3}to{opacity:1}}
+.bat{animation:bat 9s linear infinite}
+@keyframes bat{from{transform:translate(-120px,40px)}50%{transform:translate(300px,-20px)}to{transform:translate(720px,60px)}}
+.wing{transform-box:fill-box;transform-origin:50% 100%;animation:wg .2s infinite alternate}
+@keyframes wg{to{transform:scaleY(-.6)}}
+.ghost{opacity:0;transition:opacity 1.5s}.ghost.on{opacity:.55}
+.mirrorface{opacity:0}.mirrorface.on{animation:mf 1.6s}
+@keyframes mf{0%,100%{opacity:0}20%,70%{opacity:.9}}
+.gear{transform-box:fill-box;transform-origin:center}
+.spin{animation:spin 6s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:600px){#hud{grid-template-columns:1fr}.av{width:56px;height:62px}#chars{justify-content:center}#roomTitle{font-size:20px}}
+@media(prefers-reduced-motion:reduce){.fl,.rain,.bat,.wing,.glow{animation:none}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+ <pattern id="stone" width="120" height="60" patternUnits="userSpaceOnUse">
+  <rect width="120" height="60" fill="#2a2431"/>
+  <rect x="4" y="4" width="52" height="22" fill="#302838"/><rect x="64" y="4" width="52" height="22" fill="#2d2634"/>
+  <rect x="34" y="34" width="52" height="22" fill="#312a39"/><rect x="-26" y="34" width="52" height="22" fill="#2c2533"/><rect x="94" y="34" width="52" height="22" fill="#2c2533"/>
+  <path d="M0 0H120M0 30H120M0 0V30M60 0V30M30 30V60M90 30V60" stroke="#17121b" stroke-width="3"/>
+ </pattern>
+ <pattern id="wood" width="160" height="26" patternUnits="userSpaceOnUse">
+  <rect width="160" height="26" fill="#3b2518"/><path d="M0 25H160M80 0V25" stroke="#1d1009" stroke-width="2"/><path d="M10 9Q50 6 75 11M90 16Q130 13 150 18" stroke="#4a2f1f" stroke-width="2" fill="none"/>
+ </pattern>
+ <pattern id="panel" width="100" height="140" patternUnits="userSpaceOnUse">
+  <rect width="100" height="140" fill="#2a1a14"/><rect x="10" y="10" width="80" height="120" rx="4" fill="#33201a" stroke="#1a0f0a" stroke-width="3"/>
+ </pattern>
+ <pattern id="checker" width="80" height="80" patternUnits="userSpaceOnUse">
+  <rect width="80" height="80" fill="#1c1720"/><rect width="40" height="40" fill="#2e2735"/><rect x="40" y="40" width="40" height="40" fill="#2e2735"/>
+ </pattern>
+ <radialGradient id="flameG"><stop offset="0" stop-color="#fff6c0"/><stop offset=".5" stop-color="#ffb340"/><stop offset="1" stop-color="#ff6a00" stop-opacity="0"/></radialGradient>
+ <radialGradient id="halo"><stop offset="0" stop-color="#ffb340" stop-opacity=".55"/><stop offset="1" stop-color="#ffb340" stop-opacity="0"/></radialGradient>
+ <radialGradient id="vig" cx="50%" cy="45%" r="70%"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".85"/></radialGradient>
+ <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e7c46a"/><stop offset=".5" stop-color="#8a6420"/><stop offset="1" stop-color="#d7ab4b"/></linearGradient>
+ <linearGradient id="canvasG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b2a1c"/><stop offset="1" stop-color="#0f0d08"/></linearGradient>
+ <linearGradient id="nightG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#050a24"/><stop offset="1" stop-color="#1b2550"/></linearGradient>
+ <linearGradient id="stoneStatue" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6e6a72"/><stop offset=".45" stop-color="#b5b0b8"/><stop offset="1" stop-color="#5a565e"/></linearGradient>
+ <radialGradient id="spotG"><stop offset="0" stop-color="#000"/><stop offset=".55" stop-color="#000"/><stop offset="1" stop-color="#fff"/></radialGradient>
+ <filter id="soft"><feGaussianBlur stdDeviation="3"/></filter>
+</defs>
+</svg>
+
+<div id="game">
+ <div id="sceneWrap">
+  <svg id="scene" viewBox="0 0 1000 560" role="img" aria-label="Kastély szoba"></svg>
+  <div id="roomTitle"></div>
+  <div id="flash"></div>
+ </div>
+ <div id="hud">
+  <div id="chars"></div>
+  <div id="bubble" class="n"><div><b>Narrátor:</b> …</div></div>
+ </div>
+ <div id="bottom">
+  <div id="inv"></div>
+  <button class="btn" id="bHint">💡 Súgó</button>
+  <button class="btn" id="bSound">🔊</button>
+  <button class="btn red" id="bReset">↺</button>
+ </div>
+</div>
+<div id="modal"></div>
+<div id="jump"></div>
+<div id="start"></div>
+<div id="win"></div>
+
+<script>
+{
+/* ================= ÁLLAPOT ================= */
+const KEY='varjuko_v1';
+const fresh=()=>({room:'hall',inv:[],sel:null,f:{},hint:{},el:0,mute:false});
+let S=fresh();
+const $=id=>document.getElementById(id);
+const scene=$('scene');
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function loadSave(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.room&&!d.f.won)return d}catch(e){}return null}
+let playing=false;
+setInterval(()=>{if(playing){S.el+=1000;if(S.el%10000===0)save()}},1000);
+
+/* ================= HANG (WebAudio) ================= */
+let A=null,master=null;
+function initAudio(){
+ if(A)return;
+ try{A=new(window.AudioContext||window.webkitAudioContext)()}catch(e){return}
+ master=A.createGain();master.gain.value=S.mute?0:.9;master.connect(A.destination);
+ drone();
+}
+const now=()=>A.currentTime;
+function nbuf(d){const b=A.createBuffer(1,Math.max(1,A.sampleRate*d|0),A.sampleRate),c=b.getChannelData(0);for(let i=0;i<c.length;i++)c[i]=Math.random()*2-1;return b}
+function env(g,t,a,p,d){g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(p,t+a);g.gain.exponentialRampToValueAtTime(.0001,t+a+Math.max(.02,d))}
+function filt(type,f,q,dest){const x=A.createBiquadFilter();x.type=type;x.frequency.value=f;if(q)x.Q.value=q;x.connect(dest||master);return x}
+function noise(d,type,f,q,p,a,dec,t0,dest){if(!A)return;const t=t0||now(),s=A.createBufferSource();s.buffer=nbuf(d);const fl=filt(type,f,q,null);fl.disconnect();const g=A.createGain();s.connect(fl);fl.connect(g);g.connect(dest||master);env(g,t,a,p,dec);s.start(t);s.stop(t+d);return{s,fl,g}}
+function tone(type,f0,f1,dur,p,a,dest,t0){if(!A)return;const t=t0||now(),o=A.createOscillator();o.type=type;o.frequency.setValueAtTime(f0,t);if(f1)o.frequency.exponentialRampToValueAtTime(f1,t+dur);const g=A.createGain();o.connect(g);g.connect(dest||master);env(g,t,Math.min(a,dur*.5),p,dur-a);o.start(t);o.stop(t+dur+.05);return{o,g}}
+const SFX={
+ thunder(){if(!A)return;noise(4,'lowpass',320,0,.9,.02,3.6);noise(3,'lowpass',140,0,.7,.4,2.4,now()+.25)},
+ creak(){if(!A)return;const bp=filt('bandpass',700,6);for(let i=0;i<18;i++)tone('sawtooth',80+i*3+Math.random()*8,null,.07,.12,.005,bp,now()+i*.075)},
+ whisper(){if(!A)return;const pan=A.createStereoPanner?A.createStereoPanner():null;if(pan){pan.pan.value=Math.random()*1.6-.8;pan.connect(master)}
+  const n=noise(2.6,'bandpass',2600,5,.35,.5,2,0,pan||master);const l=A.createOscillator(),lg=A.createGain();l.frequency.value=4+Math.random()*4;lg.gain.value=1100;l.connect(lg);lg.connect(n.fl.frequency);l.start();l.stop(now()+2.7)},
+ scream(){if(!A)return;const bp=filt('bandpass',1500,1);[0,7].forEach(dt=>{const s=tone('sawtooth',650+dt*10,1350,1.4,.28,.03,bp);const l=A.createOscillator(),lg=A.createGain();l.frequency.value=9;lg.gain.value=70;l.connect(lg);lg.connect(s.o.frequency);l.start();l.stop(now()+1.5)});noise(1.3,'bandpass',3200,1,.25,.02,1.1)},
+ laugh(q){if(!A)return;const bp=filt('bandpass',q?600:900,3);for(let i=0;i<6;i++)tone('square',300-i*18,190-i*12,.14,q?.05:.14,.01,bp,now()+i*.2)},
+ heart(){if(!A)return;for(let k=0;k<3;k++){tone('sine',62,38,.25,.7,.01,null,now()+k*.9);tone('sine',58,36,.22,.5,.01,null,now()+k*.9+.26)}},
+ slam(){noise(.7,'lowpass',260,0,1,.005,.6);tone('sine',75,32,.6,.9,.005)},
+ thud(){noise(.4,'lowpass',400,0,.7,.005,.35);tone('sine',120,50,.3,.5,.005)},
+ drip(){tone('sine',1500,450,.14,.18,.005)},
+ organ(f){if(!A)return;const lp=filt('lowpass',2400);[[1,.22,'sine'],[2,.12,'sine'],[3,.06,'square'],[.5,.15,'sine'],[1.005,.12,'triangle']].forEach(([h,p,t])=>tone(t,f*h,null,1.7,p,.06,lp))},
+ chime(){[523,659,784,1047].forEach((f,i)=>tone('triangle',f,null,.6,.2,.01,null,now()+i*.11))},
+ wrong(){const lp=filt('lowpass',600);tone('sawtooth',110,null,.55,.22,.01,lp);tone('sawtooth',116.5,null,.55,.22,.01,lp)},
+ pick(){tone('triangle',600,1300,.22,.25,.01)},
+ unlock(){tone('square',1900,null,.05,.12,.003);tone('square',1250,null,.07,.12,.003,null,now()+.09);noise(.3,'highpass',2500,0,.2,.005,.2,now()+.12)},
+ steps(){for(let i=0;i<5;i++)noise(.2,'lowpass',180,0,.6,.005,.16,now()+i*.5)},
+ chatter(){for(let i=0;i<10;i++)noise(.03,'highpass',2600,0,.35,.002,.025,now()+i*.06)},
+ bats(){for(let i=0;i<6;i++)tone('sine',3200+Math.random()*1200,2500,.05,.05,.005,null,now()+i*.09)},
+ key(){tone('triangle',880+Math.random()*80,null,.09,.12,.005)}
+};
+function drone(){const lp=filt('lowpass',180);const g=A.createGain();g.gain.value=.05;lp.disconnect();lp.connect(g);g.connect(master);
+ [55,55.4,82.6].forEach(f=>{const o=A.createOscillator();o.type='sawtooth';o.frequency.value=f;o.connect(lp);o.start()});
+ const l=A.createOscillator(),lg=A.createGain();l.frequency.value=.08;lg.gain.value=70;l.connect(lg);lg.connect(lp.frequency);l.start()}
+function play(n,...a){if(A&&SFX[n])try{SFX[n](...a)}catch(e){}}
+
+/* ================= SZEREPLŐK (saját figurák) ================= */
+const PANDA=`<svg class="av" id="avP" viewBox="0 0 80 90"><ellipse cx="40" cy="80" rx="22" ry="10" fill="#000" opacity=".35"/>
+<ellipse cx="40" cy="70" rx="20" ry="17" fill="#f6f4f0"/><ellipse cx="23" cy="68" rx="7" ry="10" fill="#1b1b1f"/><ellipse cx="57" cy="68" rx="7" ry="10" fill="#1b1b1f"/>
+<circle cx="18" cy="16" r="10" fill="#1b1b1f"/><circle cx="62" cy="16" r="10" fill="#1b1b1f"/>
+<ellipse cx="40" cy="36" rx="28" ry="25" fill="#fbfaf7"/>
+<ellipse cx="29" cy="36" rx="8" ry="10" fill="#1b1b1f" transform="rotate(-25 29 36)"/><ellipse cx="51" cy="36" rx="8" ry="10" fill="#1b1b1f" transform="rotate(25 51 36)"/>
+<circle cx="30" cy="35" r="3" fill="#fff"/><circle cx="50" cy="35" r="3" fill="#fff"/><circle cx="31" cy="34" r="1.2" fill="#1b1b1f"/><circle cx="49" cy="34" r="1.2" fill="#1b1b1f"/>
+<ellipse cx="40" cy="45" rx="4" ry="3" fill="#1b1b1f"/><path d="M36 50Q40 54 44 50" stroke="#1b1b1f" stroke-width="2" fill="none" stroke-linecap="round"/>
+<circle cx="22" cy="46" r="4" fill="#ff9fc2" opacity=".7"/><circle cx="58" cy="46" r="4" fill="#ff9fc2" opacity=".7"/>
+<path d="M58 10l12-7 0 15zM58 10l-10-9 -1 15z" fill="#ff5fa2"/><circle cx="58" cy="10" r="4" fill="#ff86b8"/></svg>`;
+const BEAR=`<svg class="av" id="avM" viewBox="0 0 80 90"><ellipse cx="40" cy="80" rx="24" ry="10" fill="#000" opacity=".35"/>
+<ellipse cx="40" cy="70" rx="22" ry="18" fill="#8a5a33"/><ellipse cx="40" cy="73" rx="12" ry="11" fill="#c99b6d"/>
+<circle cx="17" cy="15" r="10" fill="#8a5a33"/><circle cx="63" cy="15" r="10" fill="#8a5a33"/><circle cx="17" cy="15" r="5" fill="#c99b6d"/><circle cx="63" cy="15" r="5" fill="#c99b6d"/>
+<ellipse cx="40" cy="36" rx="29" ry="26" fill="#9a6639"/><ellipse cx="40" cy="45" rx="13" ry="10" fill="#d9b38c"/>
+<circle cx="29" cy="32" r="3.4" fill="#1b120c"/><circle cx="51" cy="32" r="3.4" fill="#1b120c"/><circle cx="30" cy="31" r="1.1" fill="#fff"/><circle cx="52" cy="31" r="1.1" fill="#fff"/>
+<ellipse cx="40" cy="41" rx="5" ry="3.5" fill="#1b120c"/><path d="M35 48Q40 52 45 48" stroke="#1b120c" stroke-width="2" fill="none" stroke-linecap="round"/>
+<path d="M20 58Q40 66 60 58L58 64Q40 71 22 64Z" fill="#2f6fb0"/></svg>`;
+$('chars').innerHTML=PANDA+BEAR;
+const NAMES={p:'Hópihe',m:'Mogyi',n:'Narrátor'};
+let talkT;
+function say(who,text){
+ const b=$('bubble');b.className=who;b.innerHTML=`<div><b>${NAMES[who]}:</b> ${text}</div>`;
+ document.querySelectorAll('.av').forEach(a=>a.classList.remove('talk'));
+ const av=who==='p'?$('avP'):who==='m'?$('avM'):null;
+ if(av){av.classList.add('talk');clearTimeout(talkT);talkT=setTimeout(()=>av.classList.remove('talk'),1800)}
+}
+function chat(lines,gap=2300){lines.forEach((l,i)=>setTimeout(()=>say(l[0],l[1]),i*gap))}
+
+/* ================= TÁRGYAK ================= */
+const ITEMS={
+ rozsdas:{ic:'🗝️',n:'Rozsdás kulcs',d:'Egy nehéz, rozsdás kulcs. Vörös foltok vannak rajta… remélem, csak rozsda.'},
+ gyufa:{ic:'🔥',n:'Gyufa',d:'Egy doboz régi gyufa. Már csak néhány szál maradt benne.'},
+ kendo:{ic:'🧣',n:'Kendő',d:'Puha vászonkendő. Valaki monogramot hímzett bele: „V.B.”'},
+ lampas:{ic:'🏮',n:'Lámpás',d:'Égő lámpás. Ezzel a legsötétebb helyre is le lehet menni.'},
+ csont:{ic:'🦴',n:'Csontkulcs',d:'Csontból faragott kulcs. Jéghideg tapintású.'},
+ vas:{ic:'🔑',n:'Nagy vaskulcs',d:'Hatalmas, fekete vaskulcs. Koponya díszíti a fejét.'}
+};
+function give(id,txt){if(!S.inv.includes(id)){S.inv.push(id);play('pick');renderInv();save()}if(txt)say('n',txt)}
+function has(id){return S.inv.includes(id)}
+function using(id){return S.sel===id}
+function drop(id){S.inv=S.inv.filter(x=>x!==id);if(S.sel===id)S.sel=null;renderInv()}
+function renderInv(){
+ $('inv').innerHTML=S.inv.map(id=>`<div class="it ${S.sel===id?'sel':''}" data-it="${id}" title="${ITEMS[id].n}">${ITEMS[id].ic}<small>${ITEMS[id].n.split(' ').pop()}</small></div>`).join('');
+}
+$('inv').addEventListener('click',e=>{const t=e.target.closest('[data-it]');if(!t)return;const id=t.dataset.it;
+ if(S.sel===id){S.sel=null;say('n',ITEMS[id].d)}else{S.sel=id;say('n',`<b style="color:#ffb340">${ITEMS[id].n}</b> a kezedben — kattints valamire a szobában, amin használnád.`)}
+ renderInv()});
+
+/* ================= RAJZ SEGÉDEK ================= */
+const R=(n)=>{let s=n;return()=>{s=(s*16807)%2147483647;return s/2147483647}};
+function flame(x,y,s=1){return `<g transform="translate(${x} ${y}) scale(${s})"><circle r="26" cy="-12" fill="url(#halo)" class="glow"/><path class="fl" d="M0-24C7-13 8-4 0 0C-8-4-7-13 0-24Z" fill="#ffa52e"/><path class="fl" d="M0-15C4-9 4-3 0 0C-4-3-4-9 0-15Z" fill="#fff4b0"/></g>`}
+function candle(x,y,c,h=30,lit=true){return `<rect x="${x-4}" y="${y-h}" width="8" height="${h}" rx="2" fill="${c}"/><rect x="${x-4}" y="${y-h}" width="3" height="${h}" fill="#fff" opacity=".18"/><line x1="${x}" y1="${y-h}" x2="${x}" y2="${y-h-4}" stroke="#222" stroke-width="1.5"/>${lit?flame(x,y-h-3,.8):''}`}
+function candelabra(cx,y,n,c,sp){const w=(n-1)*sp;let s=`<path d="M${cx-22} ${y}h44l-8-8h-28z" fill="url(#gold)"/><rect x="${cx-3}" y="${y-58}" width="6" height="50" fill="url(#gold)"/>`;
+ if(n>1)s+=`<path d="M${cx-w/2} ${y-60}Q${cx} ${y-40} ${cx+w/2} ${y-60}" stroke="url(#gold)" stroke-width="5" fill="none"/>`;
+ for(let i=0;i<n;i++){const x=n>1?cx-w/2+i*sp:cx;s+=`<rect x="${x-7}" y="${y-64}" width="14" height="5" rx="2" fill="url(#gold)"/>`+candle(x,y-64,c,26)}return s}
+function eye(x,y,s,pc='#111'){return `<g class="eye" data-ex="${x}" data-ey="${y}"><ellipse cx="${x}" cy="${y}" rx="${7*s}" ry="${4.6*s}" fill="#f1ece0"/>
+ <path class="veins" d="M${x-6*s} ${y}l${3*s} ${-1*s}l${2*s} ${2*s}M${x+6*s} ${y+1*s}l${-3*s} ${-1*s}l${-1*s} ${2*s}" stroke="#c00" stroke-width="${.8*s}" fill="none"/>
+ <circle class="pupil" cx="${x}" cy="${y}" r="${2.7*s}" fill="${pc}"/></g>`}
+function face(cx,cy,s,o){
+ const sk=o.skin||'#d9c3a0',hc=o.hair||'#3a2416',cl=o.cloth||'#4a1622';let h='';
+ h+=`<path d="M${cx-62*s} ${cy+110*s}Q${cx-58*s} ${cy+50*s} ${cx-22*s} ${cy+42*s}H${cx+22*s}Q${cx+58*s} ${cy+50*s} ${cx+62*s} ${cy+110*s}Z" fill="${cl}"/>`;
+ h+=`<rect x="${cx-10*s}" y="${cy+28*s}" width="${20*s}" height="${18*s}" fill="${sk}"/><ellipse cx="${cx}" cy="${cy+44*s}" rx="${28*s}" ry="${7*s}" fill="#e8e2d2"/>`;
+ if(o.style==='wig')h+=`<ellipse cx="${cx}" cy="${cy-14*s}" rx="${42*s}" ry="${36*s}" fill="${hc}"/><circle cx="${cx-38*s}" cy="${cy+14*s}" r="${11*s}" fill="${hc}"/><circle cx="${cx+38*s}" cy="${cy+14*s}" r="${11*s}" fill="${hc}"/><circle cx="${cx-36*s}" cy="${cy+32*s}" r="${10*s}" fill="${hc}"/><circle cx="${cx+36*s}" cy="${cy+32*s}" r="${10*s}" fill="${hc}"/>`;
+ if(o.style==='long')h+=`<ellipse cx="${cx}" cy="${cy-38*s}" rx="${30*s}" ry="${34*s}" fill="${hc}"/><path d="M${cx-34*s} ${cy-10*s}Q${cx-40*s} ${cy+40*s} ${cx-26*s} ${cy+52*s}L${cx+26*s} ${cy+52*s}Q${cx+40*s} ${cy+40*s} ${cx+34*s} ${cy-10*s}Z" fill="${hc}"/>`;
+ h+=`<ellipse cx="${cx}" cy="${cy}" rx="${30*s}" ry="${38*s}" fill="${sk}"/><ellipse cx="${cx-12*s}" cy="${cy+6*s}" rx="${10*s}" ry="${14*s}" fill="#000" opacity=".08"/>`;
+ if(o.style==='child')h+=`<path d="M${cx-32*s} ${cy-2*s}Q${cx-34*s} ${cy-44*s} ${cx} ${cy-42*s}Q${cx+34*s} ${cy-44*s} ${cx+32*s} ${cy-2*s}Q${cx} ${cy-22*s} ${cx-32*s} ${cy-2*s}Z" fill="${hc}"/>`;
+ if(o.style==='bald')h+=`<path d="M${cx-30*s} ${cy-4*s}Q${cx-34*s} ${cy-16*s} ${cx-26*s} ${cy-24*s}M${cx+30*s} ${cy-4*s}Q${cx+34*s} ${cy-16*s} ${cx+26*s} ${cy-24*s}" stroke="${hc}" stroke-width="${6*s}" fill="none"/>`;
+ if(o.style==='long')h+=`<path d="M${cx-30*s} ${cy-8*s}Q${cx} ${cy-30*s} ${cx+30*s} ${cy-8*s}Q${cx+20*s} ${cy-40*s} ${cx} ${cy-40*s}Q${cx-20*s} ${cy-40*s} ${cx-30*s} ${cy-8*s}Z" fill="${hc}"/>`;
+ h+=`<path d="M${cx-20*s} ${cy-15*s}l${14*s} ${3*s}M${cx+20*s} ${cy-15*s}l${-14*s} ${3*s}" stroke="${o.brow||hc}" stroke-width="${3.4*s}" stroke-linecap="round"/>`;
+ h+=eye(cx-12*s,cy-5*s,s)+eye(cx+12*s,cy-5*s,s);
+ h+=`<path d="M${cx} ${cy-2*s}L${cx-5*s} ${cy+12*s}H${cx+3*s}" stroke="#8a6a4a" stroke-width="${2*s}" fill="none"/>`;
+ h+=`<path d="M${cx-10*s} ${cy+22*s}Q${cx} ${cy+(o.smile?27:19)*s} ${cx+10*s} ${cy+22*s}" stroke="#6a2a2a" stroke-width="${2.4*s}" fill="none"/>`;
+ if(o.must)h+=`<path d="M${cx} ${cy+16*s}Q${cx-14*s} ${cy+12*s} ${cx-22*s} ${cy+20*s}Q${cx-18*s} ${cy+12*s} ${cx} ${cy+14*s}Q${cx+18*s} ${cy+12*s} ${cx+22*s} ${cy+20*s}Q${cx+14*s} ${cy+12*s} ${cx} ${cy+16*s}Z" fill="${o.beardc||hc}"/>`;
+ if(o.beard)h+=`<path d="M${cx-24*s} ${cy+14*s}Q${cx-18*s} ${cy+58*s} ${cx} ${cy+66*s}Q${cx+18*s} ${cy+58*s} ${cx+24*s} ${cy+14*s}Q${cx} ${cy+36*s} ${cx-24*s} ${cy+14*s}Z" fill="${o.beardc||hc}"/>`;
+ return h}
+function portrait(id,x,y,w,h,o,extra=''){const s=w/150;
+ return `<g data-hs="${id}" class="portrait" id="pt_${id}"><rect x="${x-10}" y="${y-10}" width="${w+20}" height="${h+20}" rx="6" fill="url(#gold)"/><rect x="${x-4}" y="${y-4}" width="${w+8}" height="${h+8}" fill="#5a3f10"/>
+ <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#canvasG)"/><g clip-path="none">${face(x+w/2,y+h*.42,s,o)}</g>${extra}
+ <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#000" stroke-opacity=".5" stroke-width="6"/></g>`}
+function door(id,x,y,w,h,locked,label){const r=w/2;
+ return `<g data-hs="${id}"><path d="M${x-8} ${y+h}V${y+r}A${r+8} ${r+8} 0 0 1 ${x+w+8} ${y+r}V${y+h}Z" fill="#17121b"/>
+ <path d="M${x} ${y+h}V${y+r}A${r} ${r} 0 0 1 ${x+w} ${y+r}V${y+h}Z" fill="url(#wood)"/><path d="M${x} ${y+h}V${y+r}A${r} ${r} 0 0 1 ${x+w} ${y+r}V${y+h}Z" fill="#000" opacity=".25"/>
+ <rect x="${x}" y="${y+h*.32}" width="${w}" height="10" fill="#222"/><rect x="${x}" y="${y+h*.75}" width="${w}" height="10" fill="#222"/>
+ <circle cx="${x+w-18}" cy="${y+h*.55}" r="7" fill="url(#gold)"/>
+ ${locked?`<g transform="translate(${x+w-18} ${y+h*.55+26})"><path d="M-7-6v-6a7 7 0 0 1 14 0v6" stroke="#bbb" stroke-width="3" fill="none"/><rect x="-10" y="-6" width="20" height="16" rx="3" fill="#9a8a5a"/><circle r="2.5" cy="1" fill="#222"/></g>`:''}
+ ${label?`<text x="${x+w/2}" y="${y+h+22}" text-anchor="middle" font-family="IM Fell English SC" font-size="16" fill="#c9b9a0">${label}</text>`:''}</g>`}
+function nav(id,x,y,label,dir='←'){return `<g data-hs="${id}"><rect x="${x}" y="${y}" width="140" height="40" rx="20" fill="#000" opacity=".55" stroke="#7a5b8a" stroke-width="2"/><text x="${x+70}" y="${y+26}" text-anchor="middle" font-family="Nunito" font-weight="800" font-size="16" fill="#e8dcff">${dir} ${label}</text></g>`}
+function skull(x,y,s,red){return `<g transform="translate(${x} ${y}) scale(${s})"><path d="M-22 0a22 22 0 1 1 44 0v8q0 8-8 10v8h-28v-8q-8-2-8-10z" fill="#d8cfb8"/><path d="M-22 0a22 22 0 0 1 22-22v40h-14v-8q-8-2-8-10z" fill="#000" opacity=".08"/>
+ <ellipse cx="-9" cy="2" rx="6.5" ry="7.5" fill="#120c0a"/><ellipse cx="9" cy="2" rx="6.5" ry="7.5" fill="#120c0a"/>${red?`<circle class="redeye" cx="-9" cy="3" r="3.5" fill="#ff2020"/><circle class="redeye" cx="9" cy="3" r="3.5" fill="#ff2020"/><circle class="redeye" cx="0" cy="3" r="22" fill="#ff0000" opacity=".25" filter="url(#soft)"/>`:''}
+ <path d="M0 9l-4 7h8z" fill="#120c0a"/><path d="M-10 20v6M-5 20v6M0 20v6M5 20v6M10 20v6" stroke="#5a5040" stroke-width="1.5"/></g>`}
+function gear(cx,cy,r,teeth,c,cls=''){let p='';for(let i=0;i<teeth;i++){const a=i/teeth*Math.PI*2,a2=(i+.5)/teeth*Math.PI*2;p+=`${i?'L':'M'}${cx+Math.cos(a)*(r+12)} ${cy+Math.sin(a)*(r+12)}L${cx+Math.cos(a+.12)*(r+12)} ${cy+Math.sin(a+.12)*(r+12)}L${cx+Math.cos(a2)*r} ${cy+Math.sin(a2)*r}`}
+ return `<g class="gear ${cls}"><path d="${p}Z" fill="${c}"/><circle cx="${cx}" cy="${cy}" r="${r*.55}" fill="#16111a"/><circle cx="${cx}" cy="${cy}" r="${r*.2}" fill="${c}"/></g>`}
+const WALL=(fill='url(#stone)')=>`<rect width="1000" height="420" fill="${fill}"/>`;
+const VIG=`<rect width="1000" height="560" fill="url(#vig)" pointer-events="none"/>`;
+
+/* ================= SZOBÁK ================= */
+const F=S=>S.f;
+const ROOMS={
+/* ---------- 1. ELŐCSARNOK ---------- */
+hall:{title:'Előcsarnok',draw(){const f=S.f;
+ let s=WALL()+`<rect y="400" width="1000" height="160" fill="url(#checker)"/><rect y="400" width="1000" height="160" fill="#000" opacity=".35"/><rect y="396" width="1000" height="8" fill="#140f17"/>`;
+ // ablak
+ s+=`<g><path d="M410 230V110A90 90 0 0 1 590 110V230Z" fill="url(#nightG)"/><circle cx="545" cy="90" r="22" fill="#f4f1d8" opacity=".9"/>
+ <g class="rain" opacity=".5">${Array.from({length:22},(_,i)=>`<line x1="${415+i*8}" y1="${40+(i*37)%160}" x2="${410+i*8}" y2="${60+(i*37)%160}" stroke="#9ab" stroke-width="1"/>`).join('')}</g>
+ <path d="M500 20V230M410 140H590" stroke="#18121c" stroke-width="7"/><path d="M410 230V110A90 90 0 0 1 590 110V230Z" fill="none" stroke="#18121c" stroke-width="10"/><rect x="400" y="228" width="200" height="12" fill="#3a3040"/></g>`;
+ // portré
+ s+=portrait('portrait',70,60,160,210,{style:'wig',hair:'#e8e2d6',must:1,beardc:'#2a1a10',cloth:'#2a0f3a',brow:'#2a1a10'},
+  `<text x="150" y="300" text-anchor="middle" font-family="IM Fell English SC" font-size="15" fill="#c9b07a">Varjúkő Bertalan báró</text>`);
+ // asztal + gyertyatartók
+ s+=`<rect x="300" y="330" width="400" height="16" rx="3" fill="#4a2d1c"/><rect x="300" y="344" width="400" height="8" fill="#2a170d"/><rect x="320" y="350" width="14" height="80" fill="#2a170d"/><rect x="666" y="350" width="14" height="80" fill="#2a170d"/>
+ <path d="M300 346h400l-20 30h-360z" fill="#5a0d18" opacity=".85"/>`;
+ s+=`<g data-hs="candles">${candelabra(380,330,7,'#2c5fd6',15)}${candelabra(500,330,4,'#c4161c',18)}${candelabra(620,330,1,'#1e9a3c',18)}</g>`;
+ // óra
+ const hA=(9+40/60)*30,mA=40*6;
+ s+=`<g data-hs="clock"><path d="M840 470V170l15-40h70l15 40V470Z" fill="#3a2015"/><rect x="852" y="240" width="76" height="200" rx="6" fill="#1a0f0a"/><circle cx="890" cy="190" r="36" fill="#e8dcc0" stroke="url(#gold)" stroke-width="6"/>
+ ${Array.from({length:12},(_,i)=>{const a=i*30*Math.PI/180;return `<line x1="${890+Math.sin(a)*28}" y1="${190-Math.cos(a)*28}" x2="${890+Math.sin(a)*33}" y2="${190-Math.cos(a)*33}" stroke="#2a1a0a" stroke-width="2"/>`}).join('')}
+ <line x1="890" y1="190" x2="${890+Math.sin(hA*Math.PI/180)*17}" y2="${190-Math.cos(hA*Math.PI/180)*17}" stroke="#111" stroke-width="4" stroke-linecap="round"/>
+ <line x1="890" y1="190" x2="${890+Math.sin(mA*Math.PI/180)*27}" y2="${190-Math.cos(mA*Math.PI/180)*27}" stroke="#111" stroke-width="2.5" stroke-linecap="round"/><circle cx="890" cy="190" r="3" fill="#111"/>
+ <line x1="890" y1="250" x2="890" y2="380" stroke="url(#gold)" stroke-width="3"/><circle cx="890" cy="390" r="16" fill="url(#gold)"/></g>`;
+ // ajtó
+ s+=door('door',705,200,110,200,!f.hallDoor,'Könyvtár');
+ // láda
+ s+=`<g data-hs="chest">${f.chest?`<path d="M70 420l10-55h140l10 55z" fill="#4a2d1c"/><rect x="80" y="368" width="140" height="8" fill="#1a0f0a"/>`:''}
+  <rect x="70" y="420" width="160" height="70" rx="5" fill="#5a3520"/><rect x="70" y="420" width="160" height="70" rx="5" fill="url(#wood)" opacity=".6"/>
+  ${f.chest?'':`<path d="M70 420q80-45 160 0z" fill="#6a4028"/>`}<rect x="70" y="440" width="160" height="7" fill="#2a2a2a"/><rect x="138" y="430" width="24" height="26" rx="3" fill="url(#gold)"/>
+  <text x="150" y="449" text-anchor="middle" font-size="11" font-family="Nunito" font-weight="800" fill="#3a2a10">###</text></g>`;
+ // cetli
+ if(!f.noteSeen||true)s+=`<g data-hs="note"><rect x="300" y="470" width="70" height="46" fill="#e2d4ae" transform="rotate(-12 335 493)"/><path d="M312 485h45M310 495h40M314 505h30" stroke="#6a5030" stroke-width="2" transform="rotate(-12 335 493)"/></g>`;
+ // szőnyeg
+ s+=`<ellipse cx="560" cy="500" rx="170" ry="36" fill="#4a0d18" opacity=".7"/><ellipse cx="560" cy="500" rx="150" ry="28" fill="none" stroke="#a37a2a" stroke-width="2" opacity=".6"/>`;
+ return s+VIG},
+ hs:{
+  portrait(){rollEyes('pt_portrait');play('whisper');const L=[['p','Mogyi… az a festmény MOZGATJA a szemét!'],['m','Csak képzelődsz… ugye?'],['n','Halk suttogás: „…soha… nem… juttok… ki…”']];say(...L[(S.f.pc=(S.f.pc||0)+1)%3])},
+  candles(){say('m','Három gyertyatartó: kék, piros és zöld gyertyákkal. Ugyanannyi láng ég bennük, mint tegnap… vagy nem?')},
+  clock(){play('creak');say('p','Megállt az óra. A mutatók: <b>9 óra 40 perc</b>. Pont amikor a báró eltűnt…');S.f.clockSeen=1;save()},
+  note(){S.f.noteSeen=1;showPaper('Megsárgult cetli','A ládám titka a lángokban ég:<br><br><span style="color:#a01010">PIROS</span> · <span style="color:#1a7a30">ZÖLD</span> · <span style="color:#1d48a8">KÉK</span>')},
+  chest(){if(S.f.chest){say('n','Üres láda. Csak pókháló maradt benne.');return}
+   keypad('Kódzáras láda',3,'417',()=>{S.f.chest=1;play('creak');give('rozsdas');give('gyufa','A láda nyikorogva kinyílik. Benne: egy <b>rozsdás kulcs</b> és egy doboz <b>gyufa</b>!');render();setTimeout(()=>say('m','Ez az! Talán a kulcs nyitja a könyvtár ajtaját.'),2500)})},
+  door(){if(!S.f.hallDoor){if(using('rozsdas')){S.f.hallDoor=1;drop('rozsdas');play('unlock');setTimeout(()=>play('creak'),300);say('n','Kattan a zár… az ajtó lassan, nyikorogva kinyílik.');render()}else{play('wrong');say('p','Zárva van. Kell hozzá egy kulcs.')}return}
+   go('library')}
+ }},
+/* ---------- 2. KÖNYVTÁR ---------- */
+library:{title:'Könyvtár',draw(){const f=S.f,lit=f.lit;
+ let s=WALL('url(#panel)')+`<rect y="410" width="1000" height="150" fill="url(#wood)"/><rect y="410" width="1000" height="150" fill="#000" opacity=".3"/>`;
+ // bal polc
+ const rnd=R(7),cols=['#2f4f3a','#28385e','#5a3d22','#4a2d55','#7a6420','#3d3d3d','#1f4d4d'],red={'0-5':'H','1-2':'O','2-8':'L','3-4':'D'};
+ s+=`<g data-hs="shelf"><rect x="20" y="40" width="470" height="370" fill="#24150e"/><rect x="20" y="40" width="470" height="370" fill="none" stroke="#3b2518" stroke-width="12"/>`;
+ for(let r=0;r<4;r++){const by=130+r*88;let x=34,i=0;s+=`<rect x="26" y="${by}" width="458" height="10" fill="#4a2d1c"/>`;
+  while(x<470){const w=22+rnd()*12|0,h=56+rnd()*22|0;if(x+w>478)break;const k=r+'-'+i,rd=red[k];const c=rd?'#a8141c':cols[rnd()*cols.length|0];const L=rd||'ABCEFGIKMNPRSTUVZ'[rnd()*17|0];
+   if(f.bookFell&&r===0&&i===2){x+=w+1;i++;continue}
+   s+=`<rect x="${x}" y="${by-h}" width="${w}" height="${h}" fill="${c}"/><rect x="${x}" y="${by-h+8}" width="${w}" height="3" fill="#d4b060" opacity=".6"/><rect x="${x}" y="${by-14}" width="${w}" height="3" fill="#d4b060" opacity=".6"/>`;
+   if(lit)s+=`<text x="${x+w/2}" y="${by-h/2+7}" text-anchor="middle" font-family="IM Fell English SC" font-size="17" fill="${rd?'#ffd9a0':'#d8c9a8'}">${L}</text>`;
+   x+=w+1;i++}}
+ s+=`</g>`;
+ if(f.bookFell)s+=`<g class="${f.bookFellNow?'fall':''}"><rect x="160" y="470" width="70" height="30" rx="3" fill="#4a2d55" transform="rotate(8 195 485)"/><rect x="160" y="470" width="70" height="6" fill="#d4b060" transform="rotate(8 195 485)"/></g>`;
+ // titkos polc
+ if(!f.secret){s+=`<g data-hs="secret"><rect x="510" y="40" width="200" height="370" fill="#24150e" stroke="#3b2518" stroke-width="12"/>`;
+  for(let r=0;r<4;r++){const by=130+r*88;s+=`<rect x="516" y="${by}" width="188" height="10" fill="#4a2d1c"/>`;for(let i=0;i<7;i++)s+=`<rect x="${522+i*26}" y="${by-62-(i*7%15)}" width="24" height="${62+(i*7%15)}" fill="${cols[(i+r)%7]}"/>`}
+  s+=`<rect x="580" y="196" width="60" height="44" rx="6" fill="url(#gold)" stroke="#3a2a10" stroke-width="2"/>${[0,1,2,3].map(i=>`<rect x="${585+i*13}" y="206" width="11" height="24" rx="2" fill="#2a1a08"/>`).join('')}</g>`}
+ else s+=`<g data-hs="passage"><rect x="510" y="40" width="200" height="370" fill="#24150e"/><path d="M530 410V140A80 80 0 0 1 690 140V410Z" fill="#050306"/><path d="M560 410l20-60h60l20 60z" fill="#1a1219"/><path d="M580 350l10-40h40l10 40z" fill="#120c12"/>${flame(610,250,1.2)}<text x="610" y="440" text-anchor="middle" font-family="IM Fell English SC" font-size="16" fill="#c9b9a0">Titkos átjáró →</text></g>`;
+ // íróasztal
+ s+=`<rect x="740" y="340" width="240" height="18" rx="3" fill="#4a2d1c"/><rect x="752" y="356" width="18" height="90" fill="#2a170d"/><rect x="950" y="356" width="18" height="90" fill="#2a170d"/><rect x="800" y="358" width="120" height="40" fill="#3a2215"/>`;
+ s+=`<g data-hs="candle"><rect x="750" y="270" width="100" height="75" fill="#000" opacity="0"/><path d="M775 340h50l-6-6h-38z" fill="url(#gold)"/>${candle(800,334,'#e8e0c8',34,lit)}</g>`;
+ if(!has('kendo')&&!f.clothTaken)s+=`<g data-hs="cloth"><path d="M880 340q30-12 60 0l4 50q-14 10-30 0q-16 10-30 0z" fill="#e6e0d0"/><path d="M890 350q20 6 40 0" stroke="#b9b0a0" fill="none"/><text x="912" y="372" font-family="IM Fell English SC" font-size="12" fill="#8a1a1a" text-anchor="middle">V.B.</text></g>`;
+ if(lit)s+=`<g class="write" font-family="Creepster" fill="#9a0b10" text-anchor="middle"><text x="860" y="110" font-size="36">OLVASD A</text><text x="860" y="160" font-size="44">VÉRES</text><text x="860" y="210" font-size="36">GERINCEKET</text>
+  ${[790,812,846,880,915,940].map((x,i)=>`<path d="M${x} ${i%2?165:215}v${18+i*6}" stroke="#9a0b10" stroke-width="4" stroke-linecap="round"/>`).join('')}</g>`;
+ s+=nav('back',20,505,'Előcsarnok');
+ s+=VIG;
+ if(!lit)s+=`<rect width="1000" height="560" fill="#000" opacity=".86" pointer-events="none"/><g data-hs="candle"><rect x="750" y="270" width="100" height="90" fill="#000" opacity="0"/><ellipse cx="800" cy="318" rx="26" ry="34" fill="#ffd9a0" opacity=".12" class="glow"/><rect x="796" y="300" width="8" height="34" rx="2" fill="#e8e0c8" opacity=".55"/></g>`;
+ return s},
+ enter(){if(!S.f.libIn){S.f.libIn=1;setTimeout(()=>{play('whisper');chat([['p','Mogyi, nem látok semmit…'],['m','Ott az asztalon egy gyertya. Ha lenne mivel meggyújtani…']])},400)}},
+ hs:{
+  candle(){if(S.f.lit){say('n','A gyertya lobog. Mintha valaki fújná… pedig nincs huzat.');return}
+   if(using('gyufa')){S.f.lit=1;S.sel=null;renderInv();play('pick');render();setTimeout(()=>{play('heart');chat([['p','Ááá! Mi az a falon?!'],['m','„Olvasd a véres gerinceket”… Véres gerinc? A könyvek gerincére gondol!']])},600)}
+   else say('m','Egy gyertya. Valamivel meg kéne gyújtani… (válaszd ki a gyufát lent, majd kattints ide)')},
+  shelf(){if(!S.f.bookFell){S.f.bookFell=1;S.f.bookFellNow=1;render();S.f.bookFellNow=0;play('thud');setTimeout(()=>play('laugh',1),500);say('p','ÁÁÁ! Egy könyv magától leesett a polcról!');return}
+   say(S.f.lit?'m':'p',S.f.lit?'Sok-sok könyv betűkkel a gerincükön. Néhány gerinc vérvörös…':'Túl sötét van, nem látom, mi van a könyveken.')},
+  cloth(){S.f.clothTaken=1;give('kendo','Elvettétek a <b>kendőt</b>. Monogram van rajta: V.B.');render()},
+  secret(){letterLock('Titkos zár a polcon','HOLD',()=>{S.f.secret=1;play('creak');setTimeout(()=>play('slam'),900);say('n','A könyvespolc nagy recsegéssel félrecsúszik… mögötte egy sötét átjáró!');render()})},
+  passage(){go('gallery')},
+  back(){go('hall')}
+ }},
+/* ---------- 3. KÉPTÁR ---------- */
+gallery:{title:'Képtár',draw(){const f=S.f;
+ let s=WALL()+`<rect y="300" width="1000" height="120" fill="#4a0d18"/><rect y="300" width="1000" height="6" fill="url(#gold)"/><rect y="410" width="1000" height="150" fill="url(#checker)"/><rect y="410" width="1000" height="150" fill="#000" opacity=".4"/>`;
+ const P=[{id:'p0',n:'Vérös Barnabás',y:1702,d:6,o:{style:'wig',hair:'#7a1a10',beard:1,beardc:'#8a2010',cloth:'#1a2a4a'}},
+  {id:'p1',n:'Ilona grófnő',y:1655,d:3,o:{style:'long',hair:'#1a1014',cloth:'#3a0a2a',smile:1,skin:'#e8d6c0'}},
+  {id:'p2',n:'Kis Gáspár',y:1790,d:2,o:{style:'child',hair:'#d4b060',cloth:'#2a4a2a',skin:'#ecd8bc'}},
+  {id:'p3',n:'Öreg Mátyás',y:1611,d:8,o:{style:'bald',hair:'#ccc',beard:1,beardc:'#ddd',cloth:'#222',skin:'#c9b08a'}}];
+ P.forEach((p,i)=>{const x=40+i*185;s+=portrait(p.id,x,60,150,190,p.o,f[p.id]?`<text x="${x+75}" y="${60+178}" text-anchor="middle" font-family="Creepster" font-size="40" fill="#b3121b">${p.d}</text><path d="M${x+70} ${238}v14M${x+82} ${236}v10" stroke="#b3121b" stroke-width="3"/>`:'');
+  s+=`<rect x="${x+15}" y="272" width="120" height="44" rx="4" fill="url(#gold)"/><text x="${x+75}" y="290" text-anchor="middle" font-family="IM Fell English SC" font-size="14" fill="#2a1a08">${p.n}</text><text x="${x+75}" y="308" text-anchor="middle" font-family="IM Fell English SC" font-size="13" fill="#2a1a08">szül. ${p.y}</text>`});
+ s+=`<g font-family="IM Fell English SC" fill="#d8c9a8" text-anchor="middle" font-size="15"><text x="880" y="118">A LEGÖREGEBBTŐL</text><text x="880" y="138">A LEGFIATALABBIG</text></g>`;
+ s+=door('door',810,150,140,250,!f.chapel,'Kápolna');
+ s+=`<g data-hs="mirror"><rect x="560" y="360" width="90" height="140" rx="45" fill="url(#gold)"/><rect x="568" y="368" width="74" height="124" rx="37" fill="#8c9aa8"/><rect x="568" y="368" width="74" height="124" rx="37" fill="#203040" opacity=".6"/>
+  <g class="mirrorface" id="mface"><ellipse cx="605" cy="420" rx="22" ry="30" fill="#e8f0f0"/><ellipse cx="596" cy="414" rx="5" ry="8" fill="#000"/><ellipse cx="614" cy="414" rx="5" ry="8" fill="#000"/><ellipse cx="605" cy="436" rx="5" ry="9" fill="#000"/></g>
+  <path d="M580 380l20 30" stroke="#fff" opacity=".3" stroke-width="3"/><rect x="590" y="500" width="30" height="20" fill="#3a2015"/></g>`;
+ s+=nav('back',20,505,'Könyvtár');
+ return s+VIG},
+ enter(){if(!S.f.galIn){S.f.galIn=1;play('steps');chat([['m','Hallod ezeket a lépteket? …Mögöttünk.'],['p','Ne nézz hátra! Nézzük inkább a képeket!']])}},
+ hs:Object.assign({
+  mirror(){const m=document.getElementById('mface');m.classList.remove('on');requestAnimationFrame(()=>requestAnimationFrame(()=>m.classList.add('on')));play('scream');say('p','VALAKI VOLT A TÜKÖRBEN! Mögöttünk!!!');setTimeout(()=>say('m','…nincs itt senki. Brrr.'),2200)},
+  door(){if(S.f.chapel){go('chapel');return}keypad('Kápolna ajtaja',4,'8362',()=>{S.f.chapel=1;play('creak');say('n','A kápolna ajtaja kitárul. Orgonaszó szűrődik ki… pedig senki sem játszik rajta.');setTimeout(()=>play('organ',110),700);render()})},
+  back(){go('library')}},
+  Object.fromEntries(['p0','p1','p2','p3'].map((id,i)=>[id,()=>{rollEyes('pt_'+id);play(i%2?'whisper':'drip');if(!S.f[id]){S.f[id]=1;save();setTimeout(render,1600)}
+   say(...[['p','A kép szemei felfordultak… és vér szivárog elő a vászonból!'],['m','Egy szám rajzolódott ki vérrel a képen!'],['p','Ez a kisfiú… nézett rám. Esküszöm!'],['m','Az öreg úr szeme fehér lett… brrr.']][i])}])))},
+/* ---------- 4. KÁPOLNA ---------- */
+chapel:{title:'Kápolna',draw(){const f=S.f;
+ let s=WALL()+`<rect y="420" width="1000" height="140" fill="#1e1822"/><rect y="420" width="1000" height="140" fill="url(#checker)" opacity=".5"/>`;
+ // ólomüveg
+ const gc=['#b3121b','#1d48a8','#c79a1a','#1e7a3c','#6a2a9a'];
+ s+=`<polygon points="400,260 600,260 760,560 240,560" fill="#ffd2a0" opacity=".05"/>`;
+ s+=`<path d="M400 260V110A100 100 0 0 1 600 110V260Z" fill="#111"/>`;
+ for(let r=0;r<6;r++)for(let c=0;c<5;c++){s+=`<rect x="${402+c*39.2}" y="${12+r*41}" width="38" height="40" fill="${gc[(r*2+c)%5]}" opacity=".75" clip-path="url(#archClip)"/>`}
+ s+=`<clipPath id="archClip"><path d="M400 260V110A100 100 0 0 1 600 110V260Z"/></clipPath><path d="M400 260V110A100 100 0 0 1 600 110V260Z" fill="none" stroke="#111" stroke-width="10"/><path d="M500 10V260M400 135H600" stroke="#111" stroke-width="6"/>
+ <circle cx="500" cy="135" r="30" fill="#f0d070" opacity=".9"/><text x="500" y="146" text-anchor="middle" font-size="30" fill="#5a1010">✝</text>`;
+ // orgona
+ s+=`<g data-hs="organ"><rect x="30" y="120" width="250" height="300" fill="#2a170d"/>${Array.from({length:11},(_,i)=>{const h=90+Math.abs(5-i)*-12+140;return `<rect x="${42+i*21}" y="${330-h}" width="16" height="${h}" rx="6" fill="url(#gold)"/><rect x="${45+i*21}" y="${300}" width="10" height="5" rx="2" fill="#000" opacity=".6"/>`}).join('')}
+  <rect x="30" y="330" width="250" height="60" fill="#3a2015"/><rect x="50" y="345" width="210" height="24" fill="#f0ead6"/>${Array.from({length:14},(_,i)=>`<line x1="${50+i*15}" y1="345" x2="${50+i*15}" y2="369" stroke="#333"/>`).join('')}
+  <rect x="30" y="390" width="250" height="40" fill="#2a170d"/></g>`;
+ // szobor
+ s+=`<g data-hs="statue"><rect x="430" y="430" width="140" height="70" fill="#5a565e"/><rect x="420" y="420" width="160" height="16" fill="#6e6a72"/><rect x="420" y="496" width="160" height="12" fill="#4a464e"/>
+  <path d="M500 225c-32 0-40 30-40 60l-14 140h108l-14-140c0-30-8-60-40-60z" fill="url(#stoneStatue)"/>
+  <path d="M466 240q34-40 68 0l6 50q-40-20-80 0z" fill="#8f8b93"/><ellipse cx="500" cy="262" rx="22" ry="27" fill="#bdb8c0"/>
+  ${eye(491,258,.75,'#2a2a2a')}${eye(509,258,.75,'#2a2a2a')}
+  <path d="M495 280q5 3 10 0" stroke="#777" stroke-width="1.5" fill="none"/>
+  <path d="M482 330q18-14 36 0l-4 30q-14 8-28 0z" fill="#a39fa8"/>
+  <path class="bleed" d="M491 262q-2 20 0 40q2 30-4 60q-2 40 0 70" stroke="#8a0008" stroke-width="3" fill="none"/>
+  <path class="bleed" d="M509 262q2 22-1 44q-2 30 3 60q3 40 0 66" stroke="#8a0008" stroke-width="3" fill="none" style="animation-delay:.8s"/>
+  <circle class="drop" cx="488" cy="430" r="3" fill="#a00010"/><circle class="drop" cx="512" cy="430" r="3" fill="#a00010" style="animation-delay:.7s"/>
+  <ellipse class="pool" cx="500" cy="520" rx="110" ry="16" fill="#6a0008"/>
+  ${f.wiped?`<text x="500" y="478" text-anchor="middle" font-size="30" fill="#f0d070" letter-spacing="6">★ ☾ ☾ ✝ ☀</text>`:`<path d="M435 440q30 30 60 10q30 25 70 -2v50h-130z" fill="#7a0008" opacity=".95"/><path d="M450 450v30M520 450v38M545 448v24" stroke="#5a0006" stroke-width="5"/>`}</g>`;
+ // oltár + doboz
+ s+=`<rect x="700" y="350" width="190" height="80" fill="#e6e0d0"/><rect x="700" y="350" width="190" height="12" fill="#c9b07a"/><path d="M780 360v60M810 360v60" stroke="#a01010" stroke-width="6"/>${candle(715,350,'#e8e0c8',40)}${candle(875,350,'#e8e0c8',40)}`;
+ s+=`<g data-hs="box">${f.organOk?`<path d="M755 335l5-30h70l5 30z" fill="#4a2d1c"/>`:''}<rect x="755" y="320" width="80" height="32" rx="3" fill="#5a3520"/><rect x="785" y="328" width="20" height="14" rx="2" fill="url(#gold)"/>
+  ${f.organOk&&!f.boneTaken?`<g><circle cx="795" cy="318" r="22" fill="#fff" opacity=".2" class="glow"/><path d="M780 318h26M806 312v12M812 312v12" stroke="#efe6cc" stroke-width="5" stroke-linecap="round"/><circle cx="776" cy="318" r="6" fill="#efe6cc"/></g>`:''}</g>`;
+ // lámpás
+ if(!f.lampTaken)s+=`<g data-hs="lantern"><line x1="950" y1="60" x2="950" y2="150" stroke="#333" stroke-width="3"/><path d="M932 150h36l-6 70h-24z" fill="#2a2a2a"/><rect x="938" y="160" width="24" height="50" fill="#ffd27a" opacity=".25"/><path d="M928 150h44l-8-14h-28z" fill="#3a3a3a"/><rect x="940" y="218" width="20" height="8" fill="#3a3a3a"/></g>`;
+ // csapóajtó
+ s+=`<g data-hs="trap">${f.trapOpen?`<path d="M610 470h140l20 70h-180z" fill="#000"/><path d="M640 470v70M720 470v70M640 490h80M640 515h80" stroke="#4a2d1c" stroke-width="5"/>`:`<path d="M610 470h140l20 70h-180z" fill="#3b2518"/><path d="M610 470h140l20 70h-180z" fill="url(#wood)" opacity=".7"/><circle cx="680" cy="505" r="12" fill="none" stroke="#777" stroke-width="4"/><rect x="668" y="485" width="24" height="10" fill="#555"/>`}</g>`;
+ s+=nav('back',20,505,'Képtár');
+ return s+VIG},
+ enter(){if(!S.f.chIn){S.f.chIn=1;setTimeout(()=>{play('drip');setTimeout(()=>play('drip'),600);chat([['p','Mogyi… a szobor… VÉRZIK!'],['m','És a szeme… minket figyel. Bárhova megyünk.']])},500)}},
+ hs:{
+  statue(){if(S.f.wiped){play('drip');say('m','Hiába töröltük le, a szobor újra vérezni kezd… De a jelek látszanak: ★ ☾ ☾ ✝ ☀');return}
+   if(using('kendo')){S.f.wiped=1;drop('kendo');play('whisper');say('n','Letöröltétek a vért a talapzatról. Arany jelek bukkannak elő: <b>★ ☾ ☾ ✝ ☀</b>');render();setTimeout(()=>say('p','Fúj, a kendő teljesen véres lett… de mit jelentenek ezek a jelek?'),2600)}
+   else{play('drip');say('p','A talapzatot vastagon borítja a vér. Valamivel le kéne törölni…')}},
+  organ(){organ()},
+  box(){if(!S.f.organOk){play('wrong');say('m','Lezárt doboz. Nincs rajta kulcslyuk… csak apró hangjegyek vannak rávésve.');return}
+   if(!S.f.boneTaken){S.f.boneTaken=1;give('csont','Kivettétek a <b>csontkulcsot</b> a dobozból.');render();setTimeout(()=>play('laugh'),900)}else say('n','A doboz üres.')},
+  lantern(){S.f.lampTaken=1;give('lampas','Levettétek a <b>lámpást</b>. Mogyi meggyújtja a gyufával — szép meleg fénye van.');render()},
+  trap(){if(S.f.trapOpen){if(!has('lampas')){say('p','Koromsötét van odalent… Nem megyek le fény nélkül!');play('whisper');return}go('crypt');return}
+   if(using('csont')){S.f.trapOpen=1;drop('csont');play('unlock');setTimeout(()=>play('slam'),400);say('n','A csapóajtó döngve kicsapódik. Hideg, dohos levegő árad fel a mélyből…');render()}
+   else{play('wrong');say('m','Egy csapóajtó a padlóban. Furcsa, csont alakú kulcslyuk van rajta.')}},
+  back(){go('gallery')}
+ }},
+/* ---------- 5. KRIPTA ---------- */
+crypt:{title:'Kripta',draw(){const f=S.f;
+ let s=`<rect width="1000" height="560" fill="#1a1620"/>${WALL()}<rect y="420" width="1000" height="140" fill="#141016"/>`;
+ s+=`${[0,250,500,750].map(x=>`<path d="M${x} 0Q${x+125} 120 ${x+250} 0" fill="#100c12"/>`).join('')}`;
+ s+=`<path d="M0 0l90 0l-90 90z" fill="none" stroke="#bbb" stroke-width=".6" opacity=".4"/><path d="M0 20l70-20M0 45l45-45M0 70l20-70" stroke="#bbb" stroke-width=".6" opacity=".4"/>`;
+ const coffin=(id,x,y,w,h,open)=>`<g data-hs="${id}"><path d="M${x+w*.3} ${y}H${x+w*.7}L${x+w} ${y+h*.25}L${x+w*.8} ${y+h}H${x+w*.2}L${x} ${y+h*.25}Z" fill="${open?'#050305':'#3b2518'}" stroke="#1a0f0a" stroke-width="5"/>
+  ${open?'':`<path d="M${x+w/2} ${y+h*.2}v${h*.4}M${x+w*.35} ${y+h*.32}h${w*.3}" stroke="#a08040" stroke-width="5"/>`}</g>`;
+ s+=coffin('c1',60,150,110,320,f.c1);
+ if(f.c1)s+=`<g pointer-events="none">${skull(115,220,1)}<path d="M100 250v150M130 250v150M95 270h40M95 290h40M95 310h40" stroke="#d8cfb8" stroke-width="4"/></g>`;
+ s+=coffin('c2',200,150,110,320,f.c2);
+ if(f.c2)s+=`<g pointer-events="none" font-family="Creepster" fill="#c9bfa0" text-anchor="middle"><path d="M225 220l30 80M240 210l25 90M270 220l-20 70" stroke="#8a7a60" stroke-width="2"/><text x="255" y="330" font-size="20">A VÖRÖS</text><text x="255" y="355" font-size="20">SZEMŰ</text><text x="255" y="380" font-size="20">TUDJA</text></g>`;
+ s+=coffin('c3',340,150,110,320,f.c3);
+ if(f.c3)s+=`<g pointer-events="none">${[0,1,2,3,4].map(i=>`<g transform="translate(${370+i*12} ${250+i*35})"><ellipse rx="6" ry="4" fill="#111"/><path d="M-10-4l4 4M10-4l-4 4M-10 4l4-4M10 4l-4-4" stroke="#111" stroke-width="1.5"/></g>`).join('')}</g>`;
+ // koponya-polc
+ s+=`<rect x="510" y="110" width="280" height="150" fill="#0a080b" stroke="#3a3040" stroke-width="8"/>`;
+ for(let i=0;i<5;i++)s+=`<g data-hs="sk${i}">${f.ironTaken&&i===3?'':skull(540+i*55,190,.9,i===3&&!f.ironTaken)}</g>`;
+ s+=`<rect x="505" y="232" width="290" height="10" fill="#3a3040"/>`;
+ // rács
+ s+=`<g data-hs="gate"><rect x="820" y="120" width="150" height="300" fill="#050405"/>${f.gate?'<path d="M880 420l10-120h20l10 120z" fill="#2a2030"/>':''}
+  ${Array.from({length:7},(_,i)=>`<line x1="${830+i*22}" y1="${f.gate?100:110}" x2="${830+i*22}" y2="${f.gate?160:420}" stroke="#4a4a52" stroke-width="7"/><path d="M${824+i*22} ${f.gate?100:112}l6-16 6 16z" fill="#4a4a52"/>`).join('')}
+  ${f.gate?'':`<rect x="820" y="200" width="150" height="8" fill="#4a4a52"/><rect x="820" y="340" width="150" height="8" fill="#4a4a52"/><rect x="880" y="255" width="30" height="34" rx="4" fill="#6a6040"/><circle cx="895" cy="270" r="4" fill="#111"/>`}
+  <text x="895" y="445" text-anchor="middle" font-family="IM Fell English SC" font-size="16" fill="#c9b9a0">Torony</text></g>`;
+ // létra
+ s+=`<g data-hs="back"><path d="M470 0v300M530 0v300" stroke="#4a2d1c" stroke-width="8"/>${[30,80,130,180,230,280].map(y=>`<line x1="470" y1="${y}" x2="530" y2="${y}" stroke="#4a2d1c" stroke-width="7"/>`).join('')}<polygon points="470,0 530,0 600,420 400,420" fill="#ffd27a" opacity=".05"/></g>`;
+ s+=nav('back',20,505,'Fel a kápolnába','↑');
+ // zseblámpa-maszk
+ s+=`<mask id="spotM"><rect width="1000" height="560" fill="#fff"/><circle id="spotC" cx="${pt.x}" cy="${pt.y}" r="190" fill="url(#spotG)"/></mask><rect width="1000" height="560" fill="#000" opacity=".94" mask="url(#spotM)" pointer-events="none"/>`;
+ return s},
+ enter(){play('heart');if(!S.f.crIn){S.f.crIn=1;setTimeout(()=>chat([['p','Itt lent olyan hideg van… Tartsd jól a lámpást, Mogyi!'],['m','Koporsók… és koponyák. Imádom. Nem.']]),300)}},
+ hs:Object.assign({
+  c1(){if(S.f.c1){say('n','Egy csontváz. Szerencsére már nem mozdul… ugye?');return}S.f.c1=1;jumpscare();render();setTimeout(()=>chat([['p','ÁÁÁÁÁÁÁ!!!'],['m','Csak… csak egy csontváz. A szívem még most is a torkomban dobog.']]),900)},
+  c2(){if(S.f.c2){say('m','Valaki belülről karmolta a koporsót… és ezt írta: „A vörös szemű tudja.”');return}S.f.c2=1;play('creak');render();setTimeout(()=>say('p','Valaki belülről kaparta! És írás is van: „A VÖRÖS SZEMŰ TUDJA”'),700)},
+  c3(){if(S.f.c3){say('p','Pókok… mindenhol pókok. Ne nyúlj hozzá!');return}S.f.c3=1;play('chatter');render();say('m','PÓKOK! Fuss, Hópihe!')},
+  gate(){if(S.f.gate){go('tower');return}if(using('vas')){S.f.gate=1;drop('vas');play('unlock');setTimeout(()=>play('creak'),300);say('n','A rozsdás rács csikorogva felemelkedik. Mögötte csigalépcső vezet a toronyba.');render()}else{play('wrong');say('p','Lakat van a rácson. Egy nagy kulcs kéne hozzá.')}},
+  back(){go('chapel')}},
+  Object.fromEntries([0,1,2,3,4].map(i=>['sk'+i,()=>{if(i===3&&!S.f.ironTaken){S.f.ironTaken=1;play('laugh');give('vas','A vörös szemű koponya állkapcsa leesik… benne egy <b>nagy vaskulcs</b>!');render();return}
+   play('chatter');say(i%2?'p':'m',['A koponya fogai vacogni kezdtek!','Ez rám vigyorgott. Esküszöm.','Csak egy sima koponya. Sima… koponya.','','Kopp-kopp. Senki sincs itthon.'][i]||'Üres a polc ezen a részen.')}])))},
+/* ---------- 6. TORONY ---------- */
+tower:{title:'Toronyszoba',draw(){
+ let s=WALL()+`<rect y="420" width="1000" height="140" fill="url(#wood)"/><rect y="420" width="1000" height="140" fill="#000" opacity=".35"/>`;
+ s+=`<g data-hs="window"><path d="M360 340V140A140 140 0 0 1 640 140V340Z" fill="url(#nightG)"/>${Array.from({length:24},(_,i)=>`<circle cx="${370+(i*97)%260}" cy="${20+(i*53)%300}" r="${i%3?1:1.8}" fill="#fff" opacity=".8"/>`).join('')}
+  <circle cx="500" cy="150" r="60" fill="#f5f0d0"/><circle cx="520" cy="140" r="10" fill="#ddd6b0"/><circle cx="480" cy="170" r="7" fill="#ddd6b0"/>
+  <g class="bat">${[0,1,2].map(i=>`<g transform="translate(${360+i*40} ${160+i*25})"><ellipse rx="5" ry="4" fill="#000"/><path class="wing" d="M0 0q-10-10-20-2q8 2 8 8zM0 0q10-10 20-2q-8 2-8 8z" fill="#000"/></g>`).join('')}</g>
+  <path d="M360 340V140A140 140 0 0 1 640 140V340Z" fill="none" stroke="#18121c" stroke-width="14"/><path d="M500 0V340M360 210H640" stroke="#18121c" stroke-width="8"/></g>`;
+ s+=`<g class="ghost" id="ghost" pointer-events="none"><path d="M650 200q30-60 60 0l10 140q-10-12-20 0q-10-12-20 0q-10-12-20 0q-10-12-20 0z" fill="#e8f4ff"/><ellipse cx="670" cy="200" rx="5" ry="8" fill="#000"/><ellipse cx="692" cy="200" rx="5" ry="8" fill="#000"/><ellipse cx="681" cy="225" rx="6" ry="10" fill="#000"/></g>`;
+ s+=`<g data-hs="gears">${gear(150,200,70,14,'#6a5a3a')}${gear(250,320,45,10,'#7a6a4a')}${gear(120,370,35,8,'#5a4a2a')}</g>`;
+ s+=`<g font-family="IM Fell English SC" fill="#e0cfa8" text-anchor="middle" font-size="19"><text x="845" y="105">MIKOR ÁLLT MEG</text><text x="845" y="130">AZ IDŐ?</text></g>`;
+ s+=door('door',770,150,150,270,true,'Kijárat')+`<g data-hs="door"><rect x="822" y="280" width="46" height="56" rx="5" fill="#1a1a1a" stroke="url(#gold)" stroke-width="3"/>${[0,1,2,3].map(i=>`<rect x="${827+i*9.5}" y="292" width="7" height="12" fill="#3f6" opacity=".6"/>`).join('')}<rect x="830" y="312" width="30" height="16" fill="#333"/></g>`;
+ s+=nav('back',20,505,'Kripta');
+ return s+VIG},
+ enter(){if(!S.f.twIn){S.f.twIn=1;play('bats');setTimeout(()=>chat([['m','Denevérek! …és egy ajtó, számzárral. Ez lesz a kijárat!'],['p','„Mikor állt meg az idő?” Hol láttunk mi megállt időt…?']]),400)}},
+ hs:{
+  window(){play('bats');say('p','Odakint már halványodik az ég alja… Mindjárt hajnal! Siessünk!')},
+  gears(){say('m','Hatalmas fogaskerekek. Mind áll — valaki megállította a kastély óráit.')},
+  door(){keypad('A kijárat zára',4,'0940',win)},
+  back(){go('crypt')}
+ }}
+};
+
+/* ================= ÁTMENETEK / RENDER ================= */
+const pt={x:500,y:300};
+function render(){const r=ROOMS[S.room];scene.innerHTML=r.draw();$('roomTitle').textContent=r.title;renderInv();updEyes();save()}
+function go(room){play('steps');S.room=room;S.sel=null;scene.style.opacity=0;scene.style.transition='opacity .35s';
+ setTimeout(()=>{render();scene.style.opacity=1;ROOMS[room].enter&&ROOMS[room].enter()},350)}
+scene.addEventListener('click',e=>{initAudio();const t=e.target.closest('[data-hs]');if(!t)return;const h=ROOMS[S.room].hs[t.dataset.hs];
+ if(h){const sel=S.sel;h();if(sel&&S.sel===sel&&!['door','trap','gate','statue','candle'].includes(t.dataset.hs)){say('n',`A(z) ${ITEMS[sel].n.toLowerCase()} itt nem segít.`);S.sel=null;renderInv()}else if(sel&&S.sel===sel){S.sel=null;renderInv()}}});
+function toSvg(e){const p=scene.createSVGPoint();p.x=e.clientX;p.y=e.clientY;const m=scene.getScreenCTM();return m?p.matrixTransform(m.inverse()):p}
+scene.addEventListener('pointermove',e=>{const p=toSvg(e);pt.x=p.x;pt.y=p.y;updEyes();const c=document.getElementById('spotC');if(c){c.setAttribute('cx',pt.x);c.setAttribute('cy',pt.y)}});
+scene.addEventListener('pointerdown',e=>{const p=toSvg(e);pt.x=p.x;pt.y=p.y;updEyes();const c=document.getElementById('spotC');if(c){c.setAttribute('cx',pt.x);c.setAttribute('cy',pt.y)}});
+function updEyes(){scene.querySelectorAll('.eye').forEach(g=>{const ex=+g.dataset.ex,ey=+g.dataset.ey,pu=g.querySelector('.pupil');let dx,dy;
+ if(g.closest('.rolled')){dx=0;dy=-5.5}else{const ax=pt.x-ex,ay=pt.y-ey,d=Math.hypot(ax,ay)||1,m=Math.min(3.4,d/30);dx=ax/d*m;dy=ay/d*m*.7}
+ pu.setAttribute('cx',ex+dx);pu.setAttribute('cy',ey+dy)})}
+function rollEyes(id){const g=document.getElementById(id);if(!g)return;g.classList.add('rolled');updEyes();setTimeout(()=>{g.classList.remove('rolled');updEyes()},2200)}
+function jumpscare(){const j=$('jump');j.innerHTML=`<svg viewBox="0 0 400 400"><ellipse cx="200" cy="210" rx="140" ry="175" fill="#e9eee8"/><ellipse cx="200" cy="230" rx="140" ry="160" fill="#c9d0c8" opacity=".4"/>
+ <ellipse cx="140" cy="170" rx="38" ry="55" fill="#050505"/><ellipse cx="260" cy="170" rx="38" ry="55" fill="#050505"/><circle cx="140" cy="180" r="9" fill="#ff1a1a"/><circle cx="260" cy="180" r="9" fill="#ff1a1a"/>
+ <ellipse cx="200" cy="305" rx="45" ry="65" fill="#050505"/><path d="M160 260l10 18 10-18 10 18 10-18 10 18 10-18 10 18" stroke="#ddd" stroke-width="5" fill="none"/>
+ <path d="M140 225v70M262 225v80M120 220q-5 40 2 60" stroke="#8a0008" stroke-width="6" stroke-linecap="round"/></svg>`;
+ j.classList.remove('on');void j.offsetWidth;j.classList.add('on');play('scream');play('slam');setTimeout(()=>j.classList.remove('on'),900)}
+
+/* ================= ZÁRAK ================= */
+function modal(html){const m=$('modal');m.innerHTML=`<div class="box">${html}</div>`;m.classList.add('on');return m.firstChild}
+function closeModal(){$('modal').classList.remove('on')}
+$('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});
+function showPaper(t,html){const b=modal(`<h3>${t}</h3><div class="paper">${html}</div><div class="row"><button class="btn" data-x>Bezár</button></div>`);b.querySelector('[data-x]').onclick=closeModal;play('pick')}
+function keypad(title,len,ans,ok){let v='';const b=modal(`<h3>${title}</h3><div class="disp">${'<span></span>'.repeat(len)}</div><div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'OK'].map(k=>`<button data-k="${k}">${k}</button>`).join('')}</div><div class="row"><button class="btn" data-x>Mégse</button></div>`);
+ const sp=b.querySelectorAll('.disp span'),show=()=>sp.forEach((s,i)=>s.textContent=v[i]||'');
+ b.querySelector('[data-x]').onclick=closeModal;
+ b.querySelectorAll('[data-k]').forEach(btn=>btn.onclick=()=>{const k=btn.dataset.k;play('key');
+  if(k==='⌫')v=v.slice(0,-1);else if(k==='OK'){if(v===ans){closeModal();play('unlock');setTimeout(()=>play('chime'),150);ok()}else{play('wrong');b.classList.remove('shake');void b.offsetWidth;b.classList.add('shake');v='';say(Math.random()<.5?'p':'m',['Nem jó… valami nem stimmel.','Hibás kód! Hallottad ezt a nevetést?','Próbáljuk újra, gondolkodjunk!'][Math.random()*3|0]);if(Math.random()<.4)play('laugh',1)}}
+  else if(v.length<len)v+=k;show()})}
+function letterLock(title,ans,ok){const AB='AÁBCDEÉFGHIÍJKLMNOÓÖŐPQRSTUÚÜŰVWXYZ',st=[0,0,0,0];
+ const b=modal(`<h3>${title}</h3><p style="margin:0;color:#bba">Négy betűs forgózár</p><div class="wheels">${st.map((_,i)=>`<div class="wheel"><button data-u="${i}">▲</button><div id="w${i}">A</div><button data-d="${i}">▼</button></div>`).join('')}</div><div class="row"><button class="btn" data-ok>Nyitás</button><button class="btn" data-x>Mégse</button></div>`);
+ const upd=i=>b.querySelector('#w'+i).textContent=AB[st[i]];
+ b.querySelectorAll('[data-u]').forEach(x=>x.onclick=()=>{const i=+x.dataset.u;st[i]=(st[i]+AB.length-1)%AB.length;upd(i);play('key')});
+ b.querySelectorAll('[data-d]').forEach(x=>x.onclick=()=>{const i=+x.dataset.d;st[i]=(st[i]+1)%AB.length;upd(i);play('key')});
+ b.querySelector('[data-x]').onclick=closeModal;
+ b.querySelector('[data-ok]').onclick=()=>{if(st.map(i=>AB[i]).join('')===ans){closeModal();play('unlock');setTimeout(()=>play('chime'),150);ok()}else{play('wrong');b.classList.remove('shake');void b.offsetWidth;b.classList.add('shake');say('p','Nem nyílik… Melyik betűk lehetnek?')}}}
+function organ(){const sym=['☾','☀','★','✝','♛'],fr=[220,261.6,293.7,329.6,392],ans='★☾☾✝☀';let seq='';
+ const b=modal(`<h3>Az orgona</h3><p style="margin:0;color:#bba">Játssz el egy dallamot…</p><div class="organ">${sym.map((s,i)=>`<button data-o="${i}">${s}</button>`).join('')}</div><div style="min-height:34px;font-size:26px;color:#f0d070;letter-spacing:6px" id="oseq"></div><div class="row"><button class="btn" data-x>Felállok</button></div>`);
+ b.querySelector('[data-x]').onclick=closeModal;
+ b.querySelectorAll('[data-o]').forEach(x=>x.onclick=()=>{const i=+x.dataset.o;initAudio();play('organ',fr[i]);x.classList.add('dn');setTimeout(()=>x.classList.remove('dn'),180);
+  seq=([...seq,sym[i]]).slice(-5).join('');b.querySelector('#oseq').textContent=seq;
+  if(seq===ans&&!S.f.organOk){setTimeout(()=>{closeModal();S.f.organOk=1;play('chime');play('slam');say('n','Az utolsó hang után kattanás hallatszik az oltár felől… a doboz fedele felpattant!');render()},800)}
+  else if([...seq].length===5&&seq!==ans&&Math.random()<.35){setTimeout(()=>{play('whisper');say('n','Hamis hangok… valahonnan halk, gúnyos kacaj felel rájuk.')},700)}})}
+
+/* ================= SÚGÓ ================= */
+function stage(){const f=S.f;switch(S.room){
+ case'hall':return!f.chest?['hall1','Nézd meg a cetlit a padlón, aztán számold meg a gyertyákat az asztalon!','Piros: 4 gyertya, zöld: 1, kék: 7 → a láda kódja <b>417</b>.']:!f.hallDoor?['hall2','A láda adott egy kulcsot…','Válaszd ki lent a rozsdás kulcsot, majd kattints az ajtóra.']:['hall3','Irány a könyvtár az ajtón át!','Kattints a nyitott ajtóra.'];
+ case'library':return!f.lit?['lib1','Sötét van. Mivel lehetne fényt csinálni?','Válaszd ki a gyufát, majd kattints a gyertyára az asztalon.']:!f.secret?['lib2','„Véres gerincek” = a piros könyvek. Mi van rajtuk?','A piros könyvek betűi fentről le, balról jobbra: H-O-L-D → a jobb oldali polc zára: <b>HOLD</b>. (A kendőt is vidd el az asztalról!)']:['lib3','Az átjáró nyitva!',(has('kendo')||f.wiped?'':'Előtte vedd el a kendőt az asztalról! ')+'Aztán kattints a titkos átjáróra.'];
+ case'gallery':return!f.chapel?['gal1','Kattints minden portréra! A szemük… és ami utána jön.','Sorrend születési év szerint: Mátyás (1611) 8, Ilona (1655) 3, Barnabás (1702) 6, Gáspár (1790) 2 → <b>8362</b>.']:['gal2','Nyitva a kápolna.','Kattints az ajtóra.'];
+ case'chapel':return!f.wiped?['ch1','A szobor talapzatát vér takarja. Mivel lehetne letörölni?','Válaszd ki a kendőt (a könyvtár asztaláról), és kattints a szoborra.']:!f.organOk?['ch2','A talapzat jelei és az orgona billentyűi…','Játszd le az orgonán: ★ ☾ ☾ ✝ ☀']:!f.boneTaken?['ch3','Kinyílt valami az oltáron.','Kattints a dobozra az oltáron.']:!f.lampTaken?['ch4','Lent sötét lesz.','Vedd le a lámpást a jobb oldali falról.']:['ch5','A csontkulcs a padló csapóajtajához illik.','Válaszd ki a csontkulcsot, és kattints a csapóajtóra.'];
+ case'crypt':return!f.ironTaken?['cr1','Nézz be a koporsókba… egyikben üzenet van.','A koponyapolcon az egyik koponya szeme vörösen világít — kattints rá!']:['cr2','A rácsot egy nagy lakat zárja.','Válaszd ki a vaskulcsot, és kattints a rácsra.'];
+ case'tower':return['tw1','Mikor állt meg az idő? Emlékezz az első szobára!','Az előcsarnok órája 9:40-kor állt meg → <b>0940</b>.']}}
+$('bHint').onclick=()=>{initAudio();const[k,a,b]=stage();const n=S.hint[k]||0;say(n?'m':'p',(n?'Na jó, megmondom: ':'Szerintem… ')+(n?b:a));S.hint[k]=n+1;save()};
+$('bSound').onclick=()=>{initAudio();S.mute=!S.mute;if(master)master.gain.value=S.mute?0:.9;$('bSound').textContent=S.mute?'🔇':'🔊';save()};
+let resetArm=0;$('bReset').onclick=()=>{if(!resetArm){resetArm=1;$('bReset').textContent='Biztos? ↺';setTimeout(()=>{resetArm=0;$('bReset').textContent='↺'},3000);return}
+ resetArm=0;$('bReset').textContent='↺';try{localStorage.removeItem(KEY)}catch(e){}playing=false;S=fresh();startScreen()};
+
+/* ================= HANGULAT ================= */
+function ambient(){setTimeout(ambient,11000+Math.random()*13000);if(!playing||!A||$('modal').classList.contains('on'))return;
+ const r=S.room,o=[];
+ if(['hall','chapel','tower','library'].includes(r))o.push('thunder','thunder');
+ o.push('whisper','creak','steps','laugh');
+ if(r==='crypt')o.push('heart','heart','chatter');
+ if(r==='hall'||r==='gallery')o.push('eyes');
+ if(r==='tower')o.push('ghost','ghost','bats');
+ if(r==='chapel')o.push('organ');
+ const e=o[Math.random()*o.length|0];
+ if(e==='thunder'){const f=$('flash');f.classList.remove('on');void f.offsetWidth;f.classList.add('on');setTimeout(()=>play('thunder'),300);if(Math.random()<.4)setTimeout(()=>say('p','Úúúú, de nagyot dörgött!'),1200)}
+ else if(e==='eyes'){const ps=scene.querySelectorAll('.portrait');if(ps.length){rollEyes(ps[Math.random()*ps.length|0].id);play('whisper')}}
+ else if(e==='ghost'){const g=document.getElementById('ghost');if(g){g.classList.add('on');play('whisper');setTimeout(()=>g.classList.remove('on'),2600);setTimeout(()=>say('p','Ott! Az ablaknál! Egy fehér alak!'),600)}}
+ else if(e==='organ'){[110,116.5,98].forEach((f,i)=>setTimeout(()=>play('organ',f),i*900));setTimeout(()=>say('m','Az orgona… magától szól?!'),800)}
+ else if(e==='laugh'){play('laugh',1);if(Math.random()<.5)setTimeout(()=>say('m','Ki nevetett?!'),900)}
+ else{play(e);if(e==='steps'&&Math.random()<.5)setTimeout(()=>say('p','Valaki jár a fal mögött…'),1200)}}
+setTimeout(ambient,9000);
+
+/* ================= KEZDŐ / GYŐZELEM ================= */
+const CASTLE=`<svg viewBox="0 0 560 260"><defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1030"/><stop offset="1" stop-color="#3a1f50"/></linearGradient></defs>
+<rect width="560" height="260" rx="16" fill="url(#sky)"/><circle cx="440" cy="70" r="38" fill="#f3eccb"/><circle cx="452" cy="62" r="34" fill="#2a1840" opacity=".0"/>
+<path d="M60 260V140h20v-20h12v20h16v-20h12v20h20V260zM150 260V110l40-50 40 50V260zM230 260V150h24v-14h14v14h18v-14h14v14h24V260zM330 260V90l30-40 30 40V260zM390 260V160h80V260z" fill="#0c0612"/>
+<rect x="183" y="140" width="14" height="20" fill="#ffb340"/><rect x="353" y="120" width="12" height="18" fill="#ffb340"/><rect x="100" y="180" width="12" height="16" fill="#ffb340" opacity=".7"/><rect x="420" y="190" width="12" height="16" fill="#b3121b"/>
+<path d="M0 240q140-30 280 0t280 0v20H0z" fill="#070409"/>
+<g transform="translate(330 60)"><path d="M0 0q-10-10-20-2q8 2 8 8zM0 0q10-10 20-2q-8 2-8 8z" fill="#000"/></g><g transform="translate(270 40) scale(.7)"><path d="M0 0q-10-10-20-2q8 2 8 8zM0 0q10-10 20-2q-8 2-8 8z" fill="#000"/></g></svg>`;
+function startScreen(){const st=$('start'),sv=loadSave();playing=false;
+ st.innerHTML=`<h1>Szökés a<br>Varjúkő-kastélyból</h1>${CASTLE}<div style="display:flex;gap:10px;justify-content:center;margin:10px 0">${PANDA.replace('id="avP"','')}${BEAR.replace('id="avM"','')}</div>
+ <p><b style="color:#ffb6d9">Hópihe</b>, a panda lány és <b style="color:#e0a96d">Mogyi</b>, a barna mackó viharban menedéket kerestek egy régi kastélyban. Ám mögöttük becsapódott a kapu… Hat szobán át vezet a kiút: kódok, kulcsok, titkos átjárók — és valami, ami figyel.</p>
+ <p style="font-size:14px;opacity:.8">🎧 Fülhallgatóval az igazi! Tárgyat a zsebből kiválasztva, majd a szobában valamire kattintva tudtok használni.</p>
+ <div class="row"><button class="btn red" id="bNew" style="font-size:20px;padding:12px 26px">Belépés a kastélyba</button>${sv?'<button class="btn" id="bCont" style="font-size:20px;padding:12px 26px">Folytatás</button>':''}</div>`;
+ st.classList.add('on');$('win').classList.remove('on');
+ $('bNew').onclick=()=>{initAudio();S=fresh();try{localStorage.removeItem(KEY)}catch(e){}st.classList.remove('on');begin(true)};
+ if(sv)$('bCont').onclick=()=>{initAudio();S=sv;if(master)master.gain.value=S.mute?0:.9;st.classList.remove('on');begin(false)}}
+function begin(isNew){playing=true;$('bSound').textContent=S.mute?'🔇':'🔊';render();
+ if(isNew){play('thunder');const f=$('flash');f.classList.add('on');setTimeout(()=>f.classList.remove('on'),1200);setTimeout(()=>play('slam'),1300);
+  chat([['n','Villámlás, mennydörgés… és a kapu hatalmas csattanással bezárul mögöttetek.'],['p','Mogyi! Becsapódott az ajtó! Nem tudjuk kinyitni!'],['m','Nyugi, Hópihe… csak a szél volt. ...Ugye?'],['p','Nézd azt a festményt… mintha minket nézne. És ott egy láda!']],2800)}
+ else say('n','Folytatjátok, ahol abbahagytátok…')}
+function win(){playing=false;S.f.won=1;save();play('chime');setTimeout(()=>play('chime'),500);const m=Math.floor(S.el/60000),s=Math.floor(S.el/1000)%60;
+ const w=$('win');w.innerHTML=`<h1>Kijutottatok!</h1><svg viewBox="0 0 560 240"><circle cx="280" cy="240" r="110" fill="#ffd27a"/><circle cx="280" cy="240" r="150" fill="#ffd27a" opacity=".3"/>
+ <path d="M0 200q140-30 280 0t280 0v40H0z" fill="#3a5a2a"/><g transform="translate(190 100) scale(1.3)">${PANDA.replace(/<svg[^>]*>/,'').replace('</svg>','')}</g><g transform="translate(270 100) scale(1.3)">${BEAR.replace(/<svg[^>]*>/,'').replace('</svg>','')}</g></svg>
+ <p>Az ajtó kitárul, és Hópihe meg Mogyi kilép a hajnali napfénybe. A kastély mögöttük újra csendes… egyelőre.</p>
+ <p style="font-size:22px"><b>Időtök: ${m} perc ${s} mp</b><br><span style="font-size:15px">Súgót kértetek: ${Object.values(S.hint).reduce((a,b)=>a+b,0)}×</span></p>
+ <div class="row"><button class="btn red" id="bAgain" style="font-size:20px">Újra a kastélyba</button></div>`;
+ w.classList.add('on');$('bAgain').onclick=()=>{try{localStorage.removeItem(KEY)}catch(e){}S=fresh();startScreen()}}
+
+startScreen();
+}
+</script>
+</body>
+</html>
