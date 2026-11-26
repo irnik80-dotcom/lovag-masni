@@ -57,6 +57,7 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;backg
   </div>
 </div>
 <script src="peerjs.min.js"></script>
+<script src="mqtt.min.js"></script>
 <script>
 'use strict';
 /* ===================== ALAPOK ===================== */
@@ -274,39 +275,60 @@ function menuNav(){const pads=getPads();let up=jp.has('ArrowUp')||jp.has('KeyW')
 /* ===================== ONLINE: két telefon, egy szoba ===================== */
 let NR=null,roomCode=null,PEER=null;const RM=true,roomTried=true;
 const PFX='lovag-masni-v1-';
-function mkNet(peer){const N={pres:{},remote:{},conn:null,
-  presence(patch){for(const k in patch){if(patch[k]===null)delete N.pres[k];else N.pres[k]=patch[k]}N.flush();return Promise.resolve()},
-  flush(){if(N.conn&&N.conn.open){try{N.conn.send(N.pres)}catch(_){}}},
-  peers(){const a=[{sameTab:true,presence:N.pres}];if(N.conn&&N.conn.open&&N.remote&&N.remote.r)a.push({sameTab:false,presence:N.remote});return a},
-  attach(c){if(N.conn&&N.conn.open&&N.conn!==c){try{c.close()}catch(_){}return}
-    N.conn=c;c.on('data',d=>{if(d&&typeof d==='object')N.remote=d});c.on('open',()=>N.flush());
-    c.on('close',()=>{if(N.conn===c){N.conn=null;N.remote={}}});c.on('error',()=>{});if(c.open)N.flush()},
-  leave(){try{N.conn&&N.conn.close()}catch(_){}try{peer.destroy()}catch(_){}return Promise.resolve()}};return N}
+/* Két csatorna: közvetlen (PeerJS/WebRTC), és tartalék üzenetközvetítő (MQTT WebSocketen),
+   ami minden olyan hálózaton is működik, ahol a közvetlen kapcsolat nem jön létre. */
+const MQ_BROKERS=window.MQ_BROKERS||['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt'];
+const MQ_ROOT='lovagmasni-irnik80/v1/';
+function mkNet(role,code,peer){const now=()=>Date.now();
+  const N={pres:{},remote:{},conn:null,peer,mq:[],lastRx:0,lastP2P:0,lastSend:0,lastMq:0,dirty:false,timer:null,
+    outT:MQ_ROOT+code+(role==='host'?'/h':'/g'),inT:MQ_ROOT+code+(role==='host'?'/g':'/h'),
+    p2p(){return !!(N.conn&&N.conn.open)},
+    presence(patch){for(const k in patch){if(patch[k]===null)delete N.pres[k];else N.pres[k]=patch[k]}N.flush();return Promise.resolve()},
+    flush(){N.dirty=true;if(N.p2p()){try{N.conn.send(N.pres);N.dirty=false;N.lastSend=now()}catch(_){}}},
+    mqSend(){const txt=JSON.stringify(N.pres);for(const c of N.mq)if(c.connected){try{c.publish(N.outT,txt,{qos:0})}catch(_){}}N.lastMq=N.lastSend=now();N.dirty=false},
+    tick(){const t=now(),viaMq=!N.p2p()||t-N.lastP2P>3000;
+      if(N.dirty&&viaMq&&t-N.lastMq>=66)N.mqSend();
+      else if(t-N.lastSend>500){if(N.p2p())N.flush();if(viaMq)N.mqSend()}},
+    rx(d,direct){if(d&&typeof d==='object'&&(d.r==='host'||d.r==='guest')){N.remote=d;N.lastRx=now();if(direct)N.lastP2P=now()}},
+    peers(){const a=[{sameTab:true,presence:N.pres}];if((N.p2p()||now()-N.lastRx<5000)&&N.remote&&N.remote.r)a.push({sameTab:false,presence:N.remote});return a},
+    status(){return N.p2p()&&now()-N.lastP2P<3000?'közvetlen':now()-N.lastRx<5000?'szerveren át':'kapcsolódás…'},
+    anyUp(){return N.p2p()||N.mq.some(c=>c.connected)||!!(N.peer&&N.peer.open)},
+    attach(c){if(N.conn&&N.conn.open&&N.conn!==c){try{c.close()}catch(_){}return}
+      N.conn=c;c.on('data',d=>N.rx(d,true));c.on('open',()=>N.flush());
+      c.on('close',()=>{if(N.conn===c)N.conn=null});c.on('error',()=>{});if(c.open)N.flush()},
+    leave(){clearInterval(N.timer);try{N.conn&&N.conn.close()}catch(_){}try{N.peer&&N.peer.destroy()}catch(_){}
+      for(const c of N.mq){try{c.end(true)}catch(_){}}N.mq=[];return Promise.resolve()}};
+  if(typeof mqtt!=='undefined')for(const url of MQ_BROKERS){try{
+    const c=mqtt.connect(url,{clientId:'lm_'+Math.random().toString(36).slice(2,10),clean:true,connectTimeout:8000,reconnectPeriod:3000,keepalive:30});
+    c.on('connect',()=>c.subscribe(N.inT,{qos:0}));
+    c.on('message',(t,m)=>{if(t!==N.inT)return;try{N.rx(JSON.parse(m.toString()),false)}catch(_){}});
+    c.on('error',()=>{});N.mq.push(c)}catch(_){}}
+  N.timer=setInterval(()=>N.tick(),33);return N}
 const G={jc:0,ac:0,pc:0,lastSent:'',hostSeen:0,lastV:-1,lastFx:-1,rjc:null,rac:null,rpc:null,rprev:{},waitT:0,snapSeq:0,fxId:0,fx:[]};
 function toMsg(t){game.state='msg';game.msg=t;game.sel=0}
 function toTitle(){leaveRoom();game.state='title';game.sel=0;game.paused=false;if(AU.C&&AU.C.state==='suspended')AU.C.resume();MUS.play('A',-5,128)}
-function noNet(){if(typeof Peer==='undefined'){toMsg('A hálózati modul nem töltődött be. Frissítsd az oldalt!');return true}return false}
+function noNet(){if(typeof Peer==='undefined'&&typeof mqtt==='undefined'){toMsg('A hálózati modul nem töltődött be. Frissítsd az oldalt!');return true}return false}
+function mkPeer(id){if(typeof Peer==='undefined')return null;try{return id?new Peer(id,Object.assign({debug:0},window.PEER_OPTS||{})):new Peer(Object.assign({debug:0},window.PEER_OPTS||{}))}catch(_){return null}}
 function hostRoom(me,tries=0,resume=null){
-  if(noNet())return;const code=resume&&resume.code&&tries<6?resume.code:String(1000+Math.floor(Math.random()*9000));
+  if(noNet())return;const code=resume&&resume.code?resume.code:String(1000+Math.floor(Math.random()*9000));
   game.state='joining';roomCode=code;
-  const peer=new Peer(PFX+code,Object.assign({debug:0},window.PEER_OPTS||{}));PEER=peer;
-  peer.on('open',()=>{if(PEER!==peer)return;NR=mkNet(peer);game.mode='host';game.me=me;game.state='lobby';game.sel=0;
-    Object.assign(G,{rjc:null,rac:null,rpc:null,waitT:0,fx:[]});game.pendingResume=resume;NR.presence({r:'host',hc:me,st:null})});
-  peer.on('connection',c=>{if(NR)NR.attach(c)});
-  peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(_){}});
-  peer.on('error',e=>{if(PEER!==peer)return;
-    if(e.type==='unavailable-id'&&tries<8){try{peer.destroy()}catch(_){}PEER=null;if(resume&&tries<6)setTimeout(()=>{if(game.state==='joining')hostRoom(me,tries+1,resume)},2000);else hostRoom(me,tries+1,resume);return}
-    if(!NR){leaveRoom();toMsg('Nem sikerült szobát nyitni (nincs internet?). Próbáld újra!')}})}
+  const peer=mkPeer(PFX+code);PEER=peer;
+  const N=NR=mkNet('host',code,peer);game.mode='host';game.me=me;
+  Object.assign(G,{rjc:null,rac:null,rpc:null,waitT:0,fx:[]});game.pendingResume=resume;N.presence({r:'host',hc:me,st:null});
+  const t0=Date.now(),chk=setInterval(()=>{if(NR!==N){clearInterval(chk);return}
+    if(N.anyUp()){clearInterval(chk);if(game.state==='joining'){game.state='lobby';game.sel=0}}
+    else if(Date.now()-t0>12000){clearInterval(chk);leaveRoom();toMsg('Nem sikerült szobát nyitni. Van internet? Céges hálózaton a tűzfal tilthatja.')}},200);
+  if(peer){peer.on('connection',c=>{if(NR===N)N.attach(c)});
+    peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(_){}});
+    peer.on('error',()=>{})}}  // ha a kód foglalt a közvetlen szerveren, a tartalék csatorna akkor is megy
 function joinRoom(code){
   if(noNet())return;game.state='joining';roomCode=code;try{localStorage.setItem('lovag-masni-lastcode',code)}catch(_){}
-  const peer=new Peer(Object.assign({debug:0},window.PEER_OPTS||{}));PEER=peer;
-  peer.on('open',()=>{if(PEER!==peer)return;NR=mkNet(peer);game.mode='guest';
-    Object.assign(G,{jc:0,ac:0,pc:0,lastSent:'',hostSeen:T,lastV:-1,lastFx:-1});LV=null;
-    NR.presence({r:'guest',i:[0,0,0,0]});NR.attach(peer.connect(PFX+code,{reliable:true,serialization:'json'}))});
-  peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(_){}});
-  peer.on('error',e=>{if(PEER!==peer)return;
-    if(e.type==='peer-unavailable'){leaveRoom();toMsg('Nincs nyitott szoba ezzel a kóddal: '+code+'. Ellenőrizd a kódot!')}
-    else if(game.state==='joining'){leaveRoom();toMsg('Nem sikerült kapcsolódni. Próbáld újra!')}})}
+  G.lastCode=code;const peer=mkPeer(null);PEER=peer;const N=NR=mkNet('guest',code,peer);game.mode='guest';
+  Object.assign(G,{jc:0,ac:0,pc:0,lastSent:'',hostSeen:T,lastV:-1,lastFx:-1});LV=null;
+  N.presence({r:'guest',i:[0,0,0,0]});
+  if(peer){peer.on('open',()=>{if(NR===N)N.attach(peer.connect(PFX+code,{reliable:true,serialization:'json'}))});
+    peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(_){}});
+    peer.on('error',()=>{})}}
 const SAVE_KEY='lovag-masni-save';
 function loadSave(){try{const s=JSON.parse(localStorage.getItem(SAVE_KEY)||'null');return s&&s.v===1&&LEVELS[s.lvl]?s:null}catch(_){return null}}
 function writeSave(){if(game.mode==='guest'||game.state!=='play'||!LV)return;
@@ -357,7 +379,7 @@ function guestStep(){
   const ip=[b,G.jc,G.ac,G.pc],k=ip.join();if(NR&&k!==G.lastSent){G.lastSent=k;NR.presence({i:ip}).catch(()=>{})}
   const h=peerWith('host');let fresh=false;
   if(h){G.hostSeen=T;if(h.presence.hc===0||h.presence.hc===1)game.me=1-h.presence.hc;if(h.presence.st)fresh=applySnap(h.presence.st)}
-  else if(T-G.hostSeen>(game.state==='joining'?900:300)){toMsg('A társad kilépett, vagy megszakadt a kapcsolat.');leaveRoom();return}
+  else if(T-G.hostSeen>(game.state==='joining'?900:300)){const j=game.state==='joining';leaveRoom();toMsg(j?'Nem található nyitott szoba ezzel a kóddal: '+(G.lastCode||'')+'. Ellenőrizd a kódot, és hogy a társadnál nyitva van-e a szoba!':'A társad kilépett, vagy megszakadt a kapcsolat.');return}
   if(game.state==='end'){game.endT++;if(game.endT>60&&(menuNav().ok||tapped))toTitle();return}
   if(game.state!=='play')return;
   updParts();for(const k in LV.bumps){if(--LV.bumps[k]<=0)delete LV.bumps[k]}
@@ -377,6 +399,9 @@ const THEMES={
   cave:{sky:['#07070f','#1a1c2c','#29366f','#333c57','#1a1c2c'],far:'#1d2036',farL:'#29366f',near:'#262a45',nearL:'#333c57',
     dirt:'#566c86',dirtD:'#333c57',dirtL:'#6f86a0',grass:'#94b0c2',grassL:'#c8d6e0',stone:'#333c57',stoneL:'#566c86',stoneD:'#1a1c2c',
     brick:'#b13e53',brickL:'#ef7d57',mortar:'#5d275d',clouds:0,deco:'crystals'},
+  night:{sky:['#07071a','#1a1c2c','#3a1a4a','#5d275d','#b13e53'],far:'#2a1838',farL:'#5d275d',near:'#1a1022',nearL:'#3a1a3a',
+    dirt:'#5d275d',dirtD:'#3a1a3a',dirtL:'#7a3a7a',grass:'#ff77a8',grassL:'#ffc0d8',stone:'#566c86',stoneL:'#94b0c2',stoneD:'#333c57',
+    brick:'#b13e53',brickL:'#ef7d57',mortar:'#5d275d',clouds:0,deco:'roses'},
   sky:{sky:['#29366f','#5d275d','#b13e53','#ef7d57','#ffcd75'],far:'#b13e53',farL:'#ef7d57',near:'#5d275d',nearL:'#8a3a6a',
     dirt:'#b86f50',dirtD:'#743f39',dirtL:'#d08a64',grass:'#a7f070',grassL:'#e0ffb0',stone:'#94b0c2',stoneL:'#f4f4f4',stoneD:'#566c86',
     brick:'#b13e53',brickL:'#ef7d57',mortar:'#5d275d',clouds:1,deco:'flowers'}
@@ -457,6 +482,30 @@ const LEVELS=[
   b.bat(129,4);
   b.ground(133,171,12);b.coins(136,140,9);b.set(142,8,'?');b.slime(146,12);b.setFlag(160,12);
   b.castle=163;
+}},
+{name:'4. Randevú holdfénynél',sub:'Csak felnőtteknek! 😉',theme:'night',song:'A',tr:-2,bpm:112,w:170,build(b){
+  b.ground(0,18,15);b.spawn(3,15);
+  b.sign(7,15,'Üdv a 18+-os pályán! Szigorúan csak felnőtteknek… mert itt CSAK ketten mehettek tovább. 😉 A szívecskéket szedjétek össze, jól jönnek még ma este.');
+  b.coins(10,13,12);
+  b.ground(23,40,15);
+  b.rect(27,12,29,12,'=');b.rect(32,9,34,9,'=');b.coins(32,34,8);b.slime(37,15);
+  b.sign(25,15,'A lovag páncélja nagyon nehéz. Masni szerint le kéne venni… de persze csak a súlya miatt.');
+  b.ground(41,80,15);
+  b.rect(44,14,46,14,'^');b.rect(51,14,53,14,'^');b.bat(49,10);
+  b.sign(42,15,'Rózsaágyás: szép, de tüskés. Mint egy jó házasság. 🌹');
+  b.cp(57,15);
+  b.sign(59,15,'Ide csak az fér be, aki kicsi és cuki. Lovag, te szépen várj kint, és ne leskelődj!');
+  b.rect(62,3,65,12,'X');b.rect(62,13,65,13,'D');b.set(67,14,'S');
+  b.slime(71,15);b.slime(75,15);b.coins(72,75,12);
+  b.sign(78,15,'Romantikus szakadék. Masni, horgonyozz le, és húzd magadhoz a lovagot! Ne engedjétek el egymást!');
+  b.ground(87,94,15);b.ground(95,110,10);b.coins(98,103,7);b.bat(104,6);
+  b.sign(90,15,'Magasabb szintre lépünk a kapcsolatban. Szó szerint.');
+  b.ground(111,125,15);b.cp(112,15);
+  b.rect(118,3,118,14,'B');
+  b.sign(115,15,'Fal köztetek? A lovag kardja (F) megoldja. Párterápia lovag módra.');
+  b.ground(132,169,15);b.cp(133,15);b.coins(136,141,12);b.slime(144,15);b.set(148,11,'?');b.set(149,11,'?');
+  b.sign(152,15,'Már csak pár lépés a hotelig. Kéz a kézben… vagyis mancs a kesztyűben.');
+  b.setFlag(158,15);b.hotel=161;
 }}
 ];
 
@@ -474,7 +523,7 @@ function mkP(cfg){return{cfg,w:cfg.w,h:cfg.h,x:0,y:0,vx:0,vy:0,onG:false,face:1,
 
 function startLevel(i){
   const d=LEVELS[i],b=new Builder(d.w,24);d.build(b);
-  LV={name:d.name,theme:d.theme,w:b.w,h:b.h,g:b.g,signs:b.signs,flag:b.flag,castle:b.castle,cp:{...b.sp},bumps:{},mods:{}};
+  LV={name:d.name,sub:d.sub||'Lovag & Masni – együtt, előre!',hotel:b.hotel||0,theme:d.theme,w:b.w,h:b.h,g:b.g,signs:b.signs,flag:b.flag,castle:b.castle,cp:{...b.sp},bumps:{},mods:{}};
   ents=b.ents.map(e=>Object.assign(e,{x0:e.x,y0:e.y,vx0:e.vx,vy:0,alive:true,t:Math.random()*100,dt:0,onG:false}));
   PL=[mkP(KCFG),mkP(CCFG)];PL[1].face=-1;placePlayers();parts=[];
   const mx=(PL[0].x+PL[1].x)/2;cam.x=Math.max(0,Math.min(LV.w*TS-VW,mx-VW/2));cam.y=Math.max(0,Math.min(LV.h*TS-VH,PL[0].y-VH*.55));
@@ -705,6 +754,9 @@ function drawRopeAt(ax,ay,bx,by,L){const d=Math.hypot(bx-ax,by-ay),sl=Math.max(0
 
 function drawSky(Th,ox,oy){const bh=Math.ceil(VH/24);for(let i=0;i<24;i++)R(0,i*bh,VW,bh,Th.bands[i]);
   if(LV.theme==='cave'){for(let i=0;i<40;i++){const x=((i*131-ox*.15)%VW+VW)%VW,y=(i*67)%200+10-oy*.1;if((T+i*13)%90<45)R(Math.round(x),Math.round(y),1,1,i%2?'#73eff7':'#ff77a8')}}
+  if(LV.theme==='night'){for(let i=0;i<60;i++){const x=((i*131-ox*.05)%VW+VW)%VW,y=(i*47)%150+4;if((T+i*17)%120<90)R(Math.round(x),y,1,1,i%4?'#f4f4f4':'#ffcd75')}
+    const mx=380-Math.round(ox*.02),my=34-Math.round(oy*.05);R(mx-10,my-14,20,28,'#fff6d0');R(mx-14,my-10,28,20,'#fff6d0');R(mx-12,my-12,24,24,'#fff6d0');R(mx-4,my-6,4,4,'#ffe9a8');R(mx+5,my+3,3,3,'#ffe9a8');
+    for(let k=0;k<8;k++){const span=VW+40,x=Math.round((((k*97-ox*.15)%span)+span)%span)-20,y=Math.round(200-((T*.3+k*53)%220)-oy*.1);heart(x,y,k%2?'#ff77a8':'#b13e53')}}
   // távoli hegyek
   for(let i=0;i<VW;i+=4){const wx=i+ox*.2;let h=LV.theme==='cave'?60+Math.abs(Math.sin(wx*.02))*50+Math.sin(wx*.07)*10:70+Math.sin(wx*.012)*28+Math.sin(wx*.031+2)*12;
     const y=Math.round((205-oy*.2-h)/2)*2;R(i,y,4,VH-y,Th.far);R(i,y,4,2,Th.farL)}
@@ -713,8 +765,15 @@ function drawSky(Th,ox,oy){const bh=Math.ceil(VH/24);for(let i=0;i<24;i++)R(0,i*
     const y=Math.round((255-oy*.45-h)/2)*2;R(i,y,4,VH-y,Th.near);R(i,y,4,2,Th.nearL)}
   if(LV.theme==='cave'){for(let i=0;i<VW;i+=4){const wx=i+ox*.3;const h=Math.round((20+Math.abs(Math.sin(wx*.035))*40)/2)*2;R(i,0,4,h-oy*.3,'#141626')}}
 }
+function heart(x,y,c){R(x+1,y,2,1,c);R(x+4,y,2,1,c);R(x,y+1,7,2,c);R(x+1,y+3,5,1,c);R(x+2,y+4,3,1,c);R(x+3,y+5,1,1,c)}
 function cloud(x,y){const c='#f4f4f4',s='#c8d6e0';R(x+5,y,12,4,c);R(x,y+4,26,6,c);R(x+15,y+1,8,4,c);R(x+2,y+10,22,1,s)}
-function drawCastle(ox,oy){if(!LV.castle)return;const X=LV.castle*TS-ox,G=12*TS-oy,c='#5d275d',d='#3a1a3a';
+function drawHotel(ox,oy){if(!LV.hotel)return;const X=LV.hotel*TS-ox,G=15*TS-oy;
+  R(X,G-110,90,110,'#3a1a4a');R(X,G-110,90,3,'#5d275d');
+  for(let r=0;r<4;r++)for(let c=0;c<4;c++){const lit=hsh(r,c)%3!==0;R(X+8+c*20,G-98+r*20,12,12,lit?'#ffcd75':'#1a1c2c');if(lit)R(X+8+c*20,G-98+r*20,12,2,'#ff77a8')}
+  R(X+34,G-26,22,26,'#1a1c2c');R(X+36,G-24,18,24,'#743f39');R(X+50,G-13,2,2,'#ffcd75');
+  const on=(T>>4)%4!==0;R(X+12,G-132,66,18,'#1a1c2c');txt('HOTEL ♥',X+45,G-128,{al:'center',sz:10,c:on?'#ff77a8':'#5d275d',sh:null});
+  R(X+58,G-20,16,10,'#f4f4f4');txt('NE',X+66,G-20,{al:'center',sz:4,c:'#b13e53',sh:null});txt('ZAVARJ',X+66,G-15,{al:'center',sz:4,c:'#b13e53',sh:null})}
+function drawCastle(ox,oy){drawHotel(ox,oy);if(!LV.castle)return;const X=LV.castle*TS-ox,G=12*TS-oy,c='#5d275d',d='#3a1a3a';
   R(X,G-80,70,80,c);R(X-12,G-112,20,112,c);R(X+62,G-112,20,112,c);R(X+26,G-130,18,50,c);
   for(let i=0;i<4;i++){R(X-12+i*6,G-118,4,6,c);R(X+62+i*6,G-118,4,6,c)}for(let i=0;i<3;i++)R(X+26+i*7,G-136,4,6,c);
   for(let i=0;i<12;i++)R(X+i*6,G-86,4,6,c);
@@ -726,6 +785,7 @@ function drawTile(c,tx,ty,x,y,Th){
   case '#':{R(x,y,16,16,Th.dirt);const h=hsh(tx,ty);
     R(x+(h&7)+2,y+((h>>3)&7)+5,2,2,Th.dirtD);R(x+((h>>6)&7)+6,y+((h>>9)&3)+2+8*((h>>11)&1),1,1,Th.dirtD);R(x+((h>>12)%12)+1,y+((h>>15)&7)+4,1,2,Th.dirtL);
     if(!SOLID.has(tile(tx,ty-1))){R(x,y,16,4,Th.grass);for(let i=0;i<16;i+=2)R(x+i,y+4,2,((h>>i)&1)+1,Th.grass);R(x,y,16,1,Th.grassL);R(x+((h>>4)&7)*2,y+1,1,1,Th.grassL);
+      if(Th.deco==='roses'&&h%5===0){R(x+5,y-4,1,4,'#38b764');R(x+6,y-3,2,1,'#38b764');R(x+4,y-7,3,3,'#b13e53');R(x+5,y-7,1,1,'#ff77a8')}
       if(Th.deco==='flowers'){if(h%7===0){const col=['#f4f4f4','#ffcd75','#ff77a8'][(h>>5)%3];R(x+5,y-3,1,3,'#38b764');R(x+4,y-5,3,1,col);R(x+5,y-6,1,3,col);R(x+5,y-5,1,1,'#ffcd75')}
         else if(h%5===1){R(x+9,y-2,1,2,Th.grass);R(x+11,y-3,1,3,Th.grass);R(x+13,y-2,1,2,Th.grass)}}
       else if(Th.deco==='crystals'&&h%6===0){const a=(h>>4)&1?'#73eff7':'#ff77a8',b2=(h>>4)&1?'#41a6f6':'#b55088';R(x+6,y-6,2,6,a);R(x+8,y-4,2,4,b2);R(x+4,y-3,2,3,b2);R(x+6,y-6,1,2,'#f4f4f4')}}
@@ -747,7 +807,8 @@ function drawTile(c,tx,ty,x,y,Th){
     else{R(x+7,y+11,1,2,'#743f39');R(x+8,y+9,1,2,'#743f39');R(x+9,y+7,1,2,'#743f39');R(x+9,y+5,3,3,'#38b764')}break}
   case 'P':case 'Q':R(x+7,y+1,2,15,'#94b0c2');R(x+7,y+1,1,15,'#f4f4f4');R(x+9,y+1,6,5,c==='Q'?'#a7f070':'#566c86');if(c==='Q')R(x+9,y+1,6,1,'#f4f4f4');R(x+5,y+14,6,2,'#566c86');break;
   case 'i':R(x+7,y+8,2,8,'#743f39');R(x+1,y+1,14,8,'#743f39');R(x+2,y+2,12,6,'#b86f50');R(x+4,y+3,8,1,'#743f39');R(x+4,y+5,6,1,'#743f39');break;
-  case 'o':{const f=Math.floor((T+tx*7)/8)%4,w=[8,6,2,6][f],ax=x+8-w/2;R(ax,y+4,w,9,'#b86f50');R(ax+(w>2?1:0),y+5,Math.max(1,w-2),7,'#ffcd75');if(w>4)R(ax+1,y+5,1,3,'#fff6d0');break}
+  case 'o':if(LV.theme==='night'){const p=(T>>4)%2;R(x+3-p,y+4-p,2,1,'#ff77a8');R(x+9,y+4-p,2+p,1,'#ff77a8');R(x+2-p,y+5-p,11+2*p,3,'#ff77a8');R(x+3,y+8,9,2,'#ff77a8');R(x+5,y+10,5,2,'#ff77a8');R(x+7,y+12,1,1,'#ff77a8');R(x+4,y+5,2,2,'#ffc0d8');break}
+  {const f=Math.floor((T+tx*7)/8)%4,w=[8,6,2,6][f],ax=x+8-w/2;R(ax,y+4,w,9,'#b86f50');R(ax+(w>2?1:0),y+5,Math.max(1,w-2),7,'#ffcd75');if(w>4)R(ax+1,y+5,1,3,'#fff6d0');break}
   }}
 function drawFlag(ox,oy){const f=LV.flag;if(!f)return;const x=f.x-ox,y0=f.top-oy,y1=f.bot-oy;
   R(x-3,y1-3,8,3,'#566c86');R(x,y0,2,y1-y0,'#f4f4f4');R(x+1,y0,1,y1-y0,'#94b0c2');R(x-1,y0-4,4,4,'#ffcd75');
@@ -783,11 +844,11 @@ function renderPlay(){const Th=THEMES[LV.theme],ox=Math.round(cam.x),oy=Math.rou
   txt(LV.name,VW/2,2,{al:'center',c:'#f4f4f4'});txt('Elesések: '+game.deaths+(AU.on?'':'  ♪ki'),VW-5,2,{al:'right',c:'#94b0c2'});
   if(game.sign){const L=wrap(game.sign,330),w=344,h=L.length*10+10,x=(VW-w)/2,y=20;R(x,y,w,h,'rgba(26,28,44,.85)');R(x,y,w,1,'#ffcd75');R(x,y+h-1,w,1,'#ffcd75');L.forEach((l,i)=>txt(l,x+7,y+5+i*10,{c:'#f4f4f4'}))}
   if(game.intro>0&&!game.sign&&!game.dying){const a=Math.min(1,game.intro/30);ctx.globalAlpha=a;R(VW/2-120,92,240,46,'rgba(26,28,44,.85)');R(VW/2-120,92,240,2,'#ff77a8');
-    txt(LV.name,VW/2,100,{al:'center',sz:16,c:'#ffcd75'});txt('Lovag & Masni – együtt, előre!',VW/2,122,{al:'center',c:'#f4f4f4'});ctx.globalAlpha=1}
+    txt(LV.name,VW/2,100,{al:'center',sz:16,c:'#ffcd75'});txt(LV.sub,VW/2,122,{al:'center',c:'#f4f4f4'});ctx.globalAlpha=1}
   if(game.dying)txt('Jaj! Még egyszer, együtt!',VW/2,110,{al:'center',sz:14,c:'#ff77a8'});
   if(game.clear){const cols=['#ffcd75','#ff77a8','#73eff7','#a7f070'];txt('PÁLYA TELJESÍTVE!',VW/2,96,{al:'center',sz:22,c:cols[(T>>3)%4]});txt('Érmék: '+game.coins,VW/2,124,{al:'center',sz:10})}
   if(game.saveFlash>0){game.saveFlash--;txt('✓ Mentési pont',VW-5,15,{al:'right',c:'#a7f070',sz:7})}
-  if(game.mode!=='local'){txt('Online · szoba '+roomCode+' · te: '+(game.me===0?'Lovag':'Masni'),5,15,{c:'#a7f070',sz:7})}
+  if(game.mode!=='local'){txt('Online · szoba '+roomCode+' · te: '+(game.me===0?'Lovag':'Masni')+' · kapcsolat: '+(NR?NR.status():'-'),5,15,{c:'#a7f070',sz:7})}
   if((game.mode==='host'&&G.waitT>60)||(game.mode==='guest'&&game.remoteWait)){R(0,0,VW,VH,'rgba(10,10,20,.65)');txt('Várakozás a társra…',VW/2,104,{al:'center',sz:16,c:'#ffcd75'});txt('Szoba: '+roomCode+' – a társ a szobakóddal tud visszajönni.',VW/2,128,{al:'center'})}
   if(game.paused){R(0,0,VW,VH,'rgba(10,10,20,.6)');txt('SZÜNET',VW/2,104,{al:'center',sz:22,c:'#ffcd75'});txt('P / Esc: folytatás   M: zene ki/be',VW/2,134,{al:'center'})}
 }
@@ -830,7 +891,7 @@ function drawLobby(){bgDemo();
   else if(game.state==='msg'){bigTitle('HOPPÁ',30,32);wrap(game.msg,380,10).forEach((l,i)=>txt(l,VW/2,100+i*13,{al:'center',sz:10,c:'#ffcd75'}))}
   drawMenu();scroller(250)}
 function drawEnd(){bgDemo();bigTitle('GRATULÁLOK!',30,40);
-  txt('A lovag és Masni elérte a Felhőkastélyt.',VW/2,88,{al:'center',sz:10});txt('A fonal kitartott – együtt minden sikerül!',VW/2,102,{al:'center',sz:10,c:'#ff77a8'});
+  txt('A lovag és Masni végigjárta mind a 4 pályát, és megérkezett a hotelbe.',VW/2,88,{al:'center',sz:10});txt('A többi már magánügy. 😉 A fonal kitartott – együtt minden sikerül!',VW/2,102,{al:'center',sz:10,c:'#ff77a8'});
   dK.anim=dC.anim=T;ctx.save();ctx.translate(196,120);ctx.scale(2,2);drawParts(knightParts(dK),0,0,14,1);ctx.restore();
   ctx.save();ctx.translate(250,154-Math.round(Math.abs(Math.sin(T*.1))*12));ctx.scale(2,2);drawParts(catParts(dC),0,0,12,-1);ctx.restore();
   txt('Érmék: '+game.coins+'     Elesések: '+game.deaths,VW/2,190,{al:'center',sz:12,c:'#ffcd75'});
